@@ -22,8 +22,13 @@
 #ifndef nuts_bolts_h
 #define nuts_bolts_h
 
+#ifndef false
 #define false 0
 #define true 1
+#endif
+
+#define HIGH 0x1
+#define LOW  0x0
 
 // Axis array index values. Must start with 0 and be continuous.
 #define N_AXIS 3 // Number of axes
@@ -61,6 +66,10 @@
 #define bit_istrue(x,mask) ((x & mask) != 0)
 #define bit_isfalse(x,mask) ((x & mask) == 0)
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 // Read a floating point value from a string. Line points to the input buffer, char_counter 
 // is the indexer pointing to the current character of the line, while float_ptr is 
 // a pointer to the result variable. Returns true when it succeeds
@@ -74,5 +83,9 @@ void delay_us(uint32_t us);
 
 // Computes hypotenuse, avoiding avr-gcc's bloated version and the extra error checking.
 float hypot_f(float x, float y);
+
+#ifdef __cplusplus
+} // extern "C"
+#endif
 
 #endif

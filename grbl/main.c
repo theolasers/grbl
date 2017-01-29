@@ -18,6 +18,12 @@
   You should have received a copy of the GNU General Public License
   along with Grbl.  If not, see <http://www.gnu.org/licenses/>.
 */
+/* 
+  This file is based on work from Grbl v0.8, distributed under the 
+  terms of the MIT-license. See COPYING for more details.  
+    Copyright (c) 2009-2011 Simen Svale Skogsrud
+    Copyright (c) 2011-2012 Sungeun K. Jeon
+ */
 
 #include "grbl.h"
 
@@ -29,11 +35,13 @@ system_t sys;
 int main(void)
 {
   // Initialize system upon power-up.
+  screen_init();
   serial_init();   // Setup serial baud rate and interrupts
   settings_init(); // Load Grbl settings from EEPROM
   stepper_init();  // Configure stepper pins and interrupt timers
   system_init();   // Configure pinout pins and pin-change interrupt
-  
+  temperature_init();
+
   memset(&sys, 0, sizeof(sys));  // Clear all system variables
   sys.abort = true;   // Set abort to complete initialization
   sei(); // Enable interrupts
@@ -84,6 +92,8 @@ int main(void)
     // Start Grbl main loop. Processes program inputs and executes them.
     protocol_main_loop();
     
+    printPgmString(PSTR("[Soft Reset]\r\n"));
+    delay_ms(100);
   }
   return 0;   /* Never reached */
 }

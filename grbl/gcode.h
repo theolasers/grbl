@@ -200,6 +200,10 @@ typedef struct {
 } parser_block_t;
 extern parser_block_t gc_block;
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 // Initialize the parser
 void gc_init();
 
@@ -208,5 +212,9 @@ uint8_t gc_execute_line(char *line);
 
 // Set g-code parser position. Input in steps.
 void gc_sync_position(); 
+
+#ifdef __cplusplus
+} // extern "C"
+#endif
 
 #endif

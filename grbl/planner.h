@@ -38,6 +38,7 @@ typedef struct {
   // Fields used by the bresenham algorithm for tracing the line
   // NOTE: Used by stepper algorithm to execute the block correctly. Do not alter these values.
   uint8_t direction_bits;    // The direction bit set for this block (refers to *_DIRECTION_BIT in config.h)
+  uint16_t plan_spindle_speed;
   uint32_t steps[N_AXIS];    // Step count along each axis
   uint32_t step_event_count; // The maximum step axis count and number of steps required to complete this block. 
 
@@ -55,8 +56,11 @@ typedef struct {
     int32_t line_number;
   #endif
 } plan_block_t;
-
       
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 // Initialize and reset the motion plan subsystem
 void plan_reset();
 
@@ -67,6 +71,12 @@ void plan_reset();
   void plan_buffer_line(float *target, float feed_rate, uint8_t invert_feed_rate, int32_t line_number);
 #else
   void plan_buffer_line(float *target, float feed_rate, uint8_t invert_feed_rate);
+#endif
+
+#ifdef USE_LINE_NUMBERS
+  void plan_buffer_line_with_speed(float *target, float feed_rate, uint8_t invert_feed_rate, int32_t line_number, uint16_t spindle_speed, float acceleration);
+#else
+  void plan_buffer_line_with_speed(float *target, float feed_rate, uint8_t invert_feed_rate, uint16_t spindle_speed, float acceleration);
 #endif
 
 // Called when the current block is no longer needed. Discards the block and makes the memory
@@ -93,5 +103,9 @@ uint8_t plan_get_block_buffer_count();
 
 // Returns the status of the block ring buffer. True, if buffer is full.
 uint8_t plan_check_full_buffer();
+
+#ifdef __cplusplus
+} // extern "C"
+#endif
 
 #endif

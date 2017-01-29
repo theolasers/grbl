@@ -23,6 +23,7 @@
 ****************************************************************************/
 #include <avr/io.h>
 #include <avr/interrupt.h>
+#include "fastio.h"
 
 /* These EEPROM bits have different names on different devices. */
 #ifndef EEPE
@@ -76,7 +77,7 @@ void eeprom_put_char( unsigned int addr, unsigned char new_value )
 	char old_value; // Old EEPROM value.
 	char diff_mask; // Difference mask, i.e. old value XOR new value.
 
-	cli(); // Ensure atomic operation for the write operation.
+	CRITICAL_SECTION_START // Ensure atomic operation for the write operation.
 	
 	do {} while( EECR & (1<<EEPE) ); // Wait for completion of previous write.
 	#ifndef EEPROM_IGNORE_SELFPROG
@@ -121,7 +122,7 @@ void eeprom_put_char( unsigned int addr, unsigned char new_value )
 		}
 	}
 	
-	sei(); // Restore interrupt flag state.
+	CRITICAL_SECTION_END // Restore interrupt flag state.
 }
 
 // Extensions added as part of Grbl 

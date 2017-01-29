@@ -21,6 +21,7 @@
 
 #include "grbl.h"
 
+#include "ramps.h"
 
 // Some useful constants.
 #define DT_SEGMENT (1.0/(ACCELERATION_TICKS_PER_SECOND*60.0)) // min/segment 
@@ -53,6 +54,7 @@
 // data for its own use. 
 typedef struct {  
   uint8_t direction_bits;
+  uint16_t block_spindle_speed;
   uint32_t steps[N_AXIS];
   uint32_t step_event_count;
 } st_block_t;
@@ -88,6 +90,7 @@ typedef struct {
   uint8_t step_pulse_time;  // Step pulse reset time after step rise
   uint8_t step_outbits;         // The next stepping-bits to be output
   uint8_t dir_outbits;
+  uint16_t sp_speed;
   #ifdef ADAPTIVE_MULTI_AXIS_STEP_SMOOTHING
     uint32_t steps[N_AXIS];
   #endif
@@ -180,11 +183,15 @@ static st_prep_t prep;
 
 // Stepper state initialization. Cycle should only start if the st.cycle_start flag is
 // enabled. Startup init and limits call this function but shouldn't start the cycle.
-void st_wake_up() 
-{
-  // Enable stepper drivers.
-  if (bit_istrue(settings.flags,BITFLAG_INVERT_ST_ENABLE)) { STEPPERS_DISABLE_PORT |= (1<<STEPPERS_DISABLE_BIT); }
-  else { STEPPERS_DISABLE_PORT &= ~(1<<STEPPERS_DISABLE_BIT); }
+void st_wake_up() {
+    // Enable stepper drivers.
+    uint8_t val = 0;
+    if (bit_istrue(settings.flags, BITFLAG_INVERT_ST_ENABLE)) {
+        val |= (1 << STEPPERS_DISABLE_BIT);
+    } else {
+        val &= ~(1 << STEPPERS_DISABLE_BIT);
+    }
+    rampsWriteDisable(val);
 
   if (sys.state & (STATE_CYCLE | STATE_HOMING)){
     // Initialize stepper output bits
@@ -223,10 +230,17 @@ void st_go_idle()
     // stop and not drift from residual inertial forces at the end of the last movement.
     delay_ms(settings.stepper_idle_lock_time);
     pin_state = true; // Override. Disable steppers.
-  }
-  if (bit_istrue(settings.flags,BITFLAG_INVERT_ST_ENABLE)) { pin_state = !pin_state; } // Apply pin invert.
-  if (pin_state) { STEPPERS_DISABLE_PORT |= (1<<STEPPERS_DISABLE_BIT); }
-  else { STEPPERS_DISABLE_PORT &= ~(1<<STEPPERS_DISABLE_BIT); }
+    }
+    if (bit_istrue(settings.flags, BITFLAG_INVERT_ST_ENABLE)) {
+        pin_state = !pin_state;
+    } // Apply pin invert.
+    uint8_t val = 0;
+    if (pin_state) {
+        val |= (1 << STEPPERS_DISABLE_BIT);
+    } else {
+        val &= ~(1 << STEPPERS_DISABLE_BIT);
+    }
+    rampsWriteDisable(val);
 }
 
 
@@ -284,14 +298,32 @@ ISR(TIMER1_COMPA_vect)
   if (busy) { return; } // The busy-flag is used to avoid reentering this interrupt
   
   // Set the direction pins a couple of nanoseconds before we step the steppers
-  DIRECTION_PORT = (DIRECTION_PORT & ~DIRECTION_MASK) | (st.dir_outbits & DIRECTION_MASK);
+    //disabled ramps DIRECTION_PORT = (DIRECTION_PORT & ~DIRECTION_MASK) | (st.dir_outbits & DIRECTION_MASK);
+    rampsWriteDirections(st.dir_outbits);
 
   // Then pulse the stepping pins
   #ifdef STEP_PULSE_DELAY
     st.step_bits = (STEP_PORT & ~STEP_MASK) | st.step_outbits; // Store out_bits to prevent overwriting.
-  #else  // Normal operation
-    STEP_PORT = (STEP_PORT & ~STEP_MASK) | st.step_outbits;
+#else  // Normal operation
+    //disabled ramps STEP_PORT = (STEP_PORT & ~STEP_MASK) | st.step_outbits;
+    rampsWriteSteps(st.step_outbits);
   #endif  
+
+    // Change spindle speed
+    if (st.sp_speed != 0) {
+    	uint16_t sp = st.sp_speed - 1;
+    	if (sp != getSpindleSpeed()) {
+    		rampsStartSpindle(sp);
+    	}
+    }
+
+    // Check limits
+    uint8_t limitState = limits_get_state_direction(st.step_outbits, st.dir_outbits);
+    if (limitState) {
+        bit_true_atomic(sys_rt_exec_alarm, (ALARM_HARD_LIMIT_ERROR|EXEC_CRITICAL_EVENT)); // Indicate hard limit critical event
+        return; // Nothing to do but exit.
+    }
+
 
   // Enable step pulse reset timer so that The Stepper Port Reset Interrupt can reset the signal after
   // exactly settings.pulse_microseconds microseconds, independent of the main Timer1 prescaler.
@@ -327,6 +359,7 @@ ISR(TIMER1_COMPA_vect)
         st.counter_x = st.counter_y = st.counter_z = (st.exec_block->step_event_count >> 1);
       }
       st.dir_outbits = st.exec_block->direction_bits ^ dir_port_invert_mask; 
+      st.sp_speed = st.exec_block->block_spindle_speed;
 
       #ifdef ADAPTIVE_MULTI_AXIS_STEP_SMOOTHING
         // With AMASS enabled, adjust Bresenham axis increment counters according to AMASS level.
@@ -415,7 +448,8 @@ ISR(TIMER1_COMPA_vect)
 ISR(TIMER0_OVF_vect)
 {
   // Reset stepping pins (leave the direction pins)
-  STEP_PORT = (STEP_PORT & ~STEP_MASK) | (step_port_invert_mask & STEP_MASK); 
+    //disabled RAMPS STEP_PORT = (STEP_PORT & ~STEP_MASK) | (step_port_invert_mask & STEP_MASK); 
+    rampsWriteSteps((step_port_invert_mask & STEP_MASK));
   TCCR0B = 0; // Disable Timer0 to prevent re-entering this interrupt when it's not needed. 
 }
 #ifdef STEP_PULSE_DELAY
@@ -425,8 +459,9 @@ ISR(TIMER0_OVF_vect)
   // The new timing between direction, step pulse, and step complete events are setup in the
   // st_wake_up() routine.
   ISR(TIMER0_COMPA_vect) 
-  { 
-    STEP_PORT = st.step_bits; // Begin step pulse.
+  {
+    //disabled RAMPS STEP_PORT = st.step_bits; // Begin step pulse.
+    rampsWriteSteps(st.step_bits);
   }
 #endif
 
@@ -463,18 +498,22 @@ void st_reset()
   st_generate_step_dir_invert_masks();
       
   // Initialize step and direction port pins.
-  STEP_PORT = (STEP_PORT & ~STEP_MASK) | step_port_invert_mask;
-  DIRECTION_PORT = (DIRECTION_PORT & ~DIRECTION_MASK) | dir_port_invert_mask;
+    //disabled ramps STEP_PORT = (STEP_PORT & ~STEP_MASK) | step_port_invert_mask;
+    rampsWriteSteps(step_port_invert_mask);
+    //disabled ramps DIRECTION_PORT = (DIRECTION_PORT & ~DIRECTION_MASK) | dir_port_invert_mask;
+    rampsWriteDirections(dir_port_invert_mask);
 }
 
 
 // Initialize and start the stepper motor subsystem
-void stepper_init()
-{
-  // Configure step and direction interface pins
-  STEP_DDR |= STEP_MASK;
-  STEPPERS_DISABLE_DDR |= 1<<STEPPERS_DISABLE_BIT;
-  DIRECTION_DDR |= DIRECTION_MASK;
+void stepper_init() {
+    // Configure step and direction interface pins
+    //    disabled ramps
+    //  STEP_DDR |= STEP_MASK;
+    //  STEPPERS_DISABLE_DDR |= 1<<STEPPERS_DISABLE_BIT;
+    //  DIRECTION_DDR |= DIRECTION_MASK;
+    rampsInitSteppers();
+    
 
   // Configure Timer 1: Stepper Driver Interrupt
   TCCR1B &= ~(1<<WGM13); // waveform generation = 0100 = CTC
@@ -522,7 +561,7 @@ void st_update_plan_block_parameters()
 void st_prep_buffer()
 {
 
-  if (sys.state & (STATE_HOLD|STATE_MOTION_CANCEL|STATE_SAFETY_DOOR)) { 
+  if (sys.state & (STATE_HOLD|STATE_TEMPERATURE|STATE_SAFETY_DOOR)) {
     // Check if we still need to generate more segments for a motion suspend.
     if (prep.current_speed == 0.0) { return; } // Nothing to do. Bail.
   }
@@ -547,6 +586,7 @@ void st_prep_buffer()
         // segment buffer finishes the prepped block, but the stepper ISR is still executing it. 
         st_prep_block = &st_block_buffer[prep.st_block_index];
         st_prep_block->direction_bits = pl_block->direction_bits;
+        st_prep_block->block_spindle_speed = pl_block->plan_spindle_speed;
         #ifndef ADAPTIVE_MULTI_AXIS_STEP_SMOOTHING
           st_prep_block->steps[X_AXIS] = pl_block->steps[X_AXIS];
           st_prep_block->steps[Y_AXIS] = pl_block->steps[Y_AXIS];
@@ -569,7 +609,7 @@ void st_prep_buffer()
         
         prep.dt_remainder = 0.0; // Reset for new planner block
 
-        if (sys.state & (STATE_HOLD|STATE_MOTION_CANCEL|STATE_SAFETY_DOOR)) {
+        if (sys.state & (STATE_HOLD|STATE_TEMPERATURE|STATE_SAFETY_DOOR)) {
           // Override planner block entry speed and enforce deceleration during feed hold.
           prep.current_speed = prep.exit_speed; 
           pl_block->entry_speed_sqr = prep.exit_speed*prep.exit_speed; 
@@ -585,7 +625,7 @@ void st_prep_buffer()
       */
       prep.mm_complete = 0.0; // Default velocity profile complete at 0.0mm from end of block.
       float inv_2_accel = 0.5/pl_block->acceleration;
-      if (sys.state & (STATE_HOLD|STATE_MOTION_CANCEL|STATE_SAFETY_DOOR)) { // [Forced Deceleration to Zero Velocity]
+      if (sys.state & (STATE_HOLD|STATE_TEMPERATURE|STATE_SAFETY_DOOR)) { // [Forced Deceleration to Zero Velocity]
         // Compute velocity profile parameters for a feed hold in-progress. This profile overrides
         // the planner block profile, enforcing a deceleration to zero speed.
         prep.ramp_type = RAMP_DECEL;
@@ -744,7 +784,7 @@ void st_prep_buffer()
     
     // Bail if we are at the end of a feed hold and don't have a step to execute.
     if (prep_segment->n_step == 0) {
-      if (sys.state & (STATE_HOLD|STATE_MOTION_CANCEL|STATE_SAFETY_DOOR)) {
+      if (sys.state & (STATE_HOLD|STATE_TEMPERATURE|STATE_SAFETY_DOOR)) {
         // Less than one step to decelerate to zero speed, but already very close. AMASS 
         // requires full steps to execute. So, just bail.
         prep.current_speed = 0.0; // NOTE: (=0.0) Used to indicate completed segment calcs for hold.
@@ -841,7 +881,7 @@ void st_prep_buffer()
 #ifdef REPORT_REALTIME_RATE
   float st_get_realtime_rate()
   {
-     if (sys.state & (STATE_CYCLE | STATE_HOMING | STATE_HOLD | STATE_MOTION_CANCEL | STATE_SAFETY_DOOR)){
+     if (sys.state & (STATE_CYCLE | STATE_HOMING | STATE_HOLD | STATE_TEMPERATURE | STATE_SAFETY_DOOR)){
        return prep.current_speed;
      }
     return 0.0f;

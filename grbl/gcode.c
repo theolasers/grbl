@@ -20,6 +20,7 @@
 */
 
 #include "grbl.h"
+#include "protocol_parser_intf.h"
 
 // NOTE: Max line number is defined by the g-code standard to be 99999. It seems to be an
 // arbitrary value, and some GUIs may require more. So we increased it based on a max safe
@@ -312,6 +313,42 @@ uint8_t gc_execute_line(char *line)
               case 9: gc_block.modal.coolant = COOLANT_DISABLE; break;
             }
             break;
+          case 21: // Initialize SD card
+          case 22: // Release SD card
+        	  return STATUS_OK;
+          case 84: // M84: Stop idle hold
+        	  spindle_stop();
+        	  break;
+          case 104: // Set Extruder Temperature
+          case 106: // Fan On
+          case 140: // Set Bed Temperature (Fast)
+        	  return STATUS_OK;
+          case 105: // Get Extruder Temperature, e.g. "ok T:201 B:117"
+        	  printPgmString(PSTR("ok T:"));
+        	  print_uint32_base10((uint32_t) get_current_temperature());
+        	  printPgmString(PSTR(" "));
+        	  print_uint32_base10((uint32_t) settings.temperature_soft_limit);
+        	  printPgmString(PSTR("\r\n"));
+        	  return STATUS_NO_RESPONSE;
+          case 110:
+        	  letter = line[char_counter];
+        	  if(letter != 'N') { FAIL(STATUS_EXPECTED_COMMAND_LETTER); } // [Expected word letter]
+        	  char_counter++;
+        	  if (!read_float(line, &char_counter, &value)) { FAIL(STATUS_BAD_NUMBER_FORMAT); } // [Expected word value]
+        	  // Only accept reset to 0 at the moment
+        	  if (value != 0.0f) { FAIL(STATUS_INVALID_STATEMENT); }
+        	  break;
+          case 76:
+        	  protocol_paser_file_cancel();
+        	  return STATUS_OK;
+          case 79:
+        	  letter = line[char_counter];
+			  if(letter != 'S') { FAIL(STATUS_EXPECTED_COMMAND_LETTER); } // [Expected word letter]
+			  char_counter++;
+			  float on;
+			  if (!read_float(line, &char_counter, &on)) { FAIL(STATUS_BAD_NUMBER_FORMAT); } // [Expected word value]
+			  report_automatic_status(on>0.0f?1:0);
+        	  return STATUS_OK;
           default: FAIL(STATUS_GCODE_UNSUPPORTED_COMMAND); // [Unsupported M command]
         }
       
@@ -691,7 +728,7 @@ uint8_t gc_execute_line(char *line)
 
           if (value_words & bit(WORD_R)) { // Arc Radius Mode  
             bit_false(value_words,bit(WORD_R));
-            if (gc_check_same_position(gc_state.position, gc_block.values.xyz)) { FAIL(STATUS_GCODE_INVALID_TARGET); } // [Invalid target]
+            if (gc_check_same_position(gc_state.position, gc_block.values.xyz)) { FAIL(STATUS_GCODE_SAME_POSITION); } // [Invalid target]
           
             // Convert radius value to proper units.
             if (gc_block.modal.units == UNITS_MODE_INCHES) { gc_block.values.r *= MM_PER_INCH; }
@@ -815,7 +852,7 @@ uint8_t gc_execute_line(char *line)
           //   an error, it issues an alarm to prevent further motion to the probe. It's also done there to 
           //   allow the planner buffer to empty and move off the probe trigger before another probing cycle.
           if (!axis_words) { FAIL(STATUS_GCODE_NO_AXIS_WORDS); } // [No axis words]
-          if (gc_check_same_position(gc_state.position, gc_block.values.xyz)) { FAIL(STATUS_GCODE_INVALID_TARGET); } // [Invalid target]
+          if (gc_check_same_position(gc_state.position, gc_block.values.xyz)) { FAIL(STATUS_GCODE_SAME_POSITION); } // [Invalid target]
           break;
       } 
     }

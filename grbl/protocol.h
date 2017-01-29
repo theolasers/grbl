@@ -32,12 +32,18 @@
   #define LINE_BUFFER_SIZE 80
 #endif
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 // Starts Grbl main loop. It handles all incoming characters from the serial port and executes
 // them as they complete. It is also responsible for finishing the initialization procedures.
 void protocol_main_loop();
 
 // Checks and executes a realtime command at various stop points in main program
 void protocol_execute_realtime();
+
+void protocol_parse_serial();
 
 // Notify the stepper subsystem to start executing the g-code program in buffer.
 // void protocol_cycle_start();
@@ -53,5 +59,12 @@ void protocol_auto_cycle_start();
 
 // Block until all buffered steps are executed
 void protocol_buffer_synchronize();
+
+// Directs and executes one line of formatted input from protocol_process.
+void protocol_execute_line(char *line);
+
+#ifdef __cplusplus
+} // extern "C"
+#endif
 
 #endif

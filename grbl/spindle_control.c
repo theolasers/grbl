@@ -20,10 +20,16 @@
 */
 
 #include "grbl.h"
+#include "ramps.h"
 
+#include"fastio.h"
 
 void spindle_init()
-{    
+{
+#ifdef CPU_MAP_ATMEGA2560_RAMPS_1_4
+	rampsInitSpindle();
+	spindle_stop();
+#else
   // Configure variable spindle PWM and enable pin, if requried. On the Uno, PWM and enable are
   // combined unless configured otherwise.
   #ifdef VARIABLE_SPINDLE
@@ -39,13 +45,16 @@ void spindle_init()
   #ifndef USE_SPINDLE_DIR_AS_ENABLE_PIN
     SPINDLE_DIRECTION_DDR |= (1<<SPINDLE_DIRECTION_BIT); // Configure as output pin.
   #endif
-  spindle_stop();
+#endif
 }
 
 
 void spindle_stop()
 {
-  // On the Uno, spindle enable and PWM are shared. Other CPUs have seperate enable pin.
+#ifdef CPU_MAP_ATMEGA2560_RAMPS_1_4
+	rampsStopSpindle();
+#else
+	// On the Uno, spindle enable and PWM are shared. Other CPUs have seperate enable pin.
   #ifdef VARIABLE_SPINDLE
     TCCRA_REGISTER &= ~(1<<COMB_BIT); // Disable PWM. Output voltage is zero.
     #if defined(CPU_MAP_ATMEGA2560) || defined(USE_SPINDLE_DIR_AS_ENABLE_PIN)
@@ -62,6 +71,7 @@ void spindle_stop()
 	  SPINDLE_ENABLE_PORT &= ~(1<<SPINDLE_ENABLE_BIT); // Set pin to low
 	#endif
   #endif  
+#endif
 }
 
 
@@ -76,24 +86,29 @@ void spindle_set_state(uint8_t state, float rpm)
 
     #ifndef USE_SPINDLE_DIR_AS_ENABLE_PIN
       if (state == SPINDLE_ENABLE_CW) {
-        SPINDLE_DIRECTION_PORT &= ~(1<<SPINDLE_DIRECTION_BIT);
+        //SPINDLE_DIRECTION_PORT &= ~(1<<SPINDLE_DIRECTION_BIT);
+    	  rampsLeftSpindle();
       } else {
-        SPINDLE_DIRECTION_PORT |= (1<<SPINDLE_DIRECTION_BIT);
+        //SPINDLE_DIRECTION_PORT |= (1<<SPINDLE_DIRECTION_BIT);
+    	  rampsRightSpindle();
       }
     #endif
 
-    #ifdef VARIABLE_SPINDLE
+	#ifdef VARIABLE_SPINDLE
+#ifndef CPU_MAP_ATMEGA2560_RAMPS_1_4
+	#ifdef TCCRA_REGISTER
       // TODO: Install the optional capability for frequency-based output for servos.
       #ifdef CPU_MAP_ATMEGA2560
       	TCCRA_REGISTER = (1<<COMB_BIT) | (1<<WAVE1_REGISTER) | (1<<WAVE0_REGISTER);
         TCCRB_REGISTER = (TCCRB_REGISTER & 0b11111000) | 0x02 | (1<<WAVE2_REGISTER) | (1<<WAVE3_REGISTER); // set to 1/8 Prescaler
         OCR4A = 0xFFFF; // set the top 16bit value
-        uint16_t current_pwm;
       #else
         TCCRA_REGISTER = (1<<COMB_BIT) | (1<<WAVE1_REGISTER) | (1<<WAVE0_REGISTER);
         TCCRB_REGISTER = (TCCRB_REGISTER & 0b11111000) | 0x02; // set to 1/8 Prescaler
-        uint8_t current_pwm;
       #endif
+	#endif
+#endif
+        uint16_t current_pwm;
 
       #define SPINDLE_RPM_RANGE (SPINDLE_MAX_RPM-SPINDLE_MIN_RPM)
       if ( rpm < SPINDLE_MIN_RPM ) { rpm = 0; } 
@@ -105,7 +120,10 @@ void spindle_set_state(uint8_t state, float rpm)
       #ifdef MINIMUM_SPINDLE_PWM
         if (current_pwm < MINIMUM_SPINDLE_PWM) { current_pwm = MINIMUM_SPINDLE_PWM; }
       #endif
+
+#ifndef CPU_MAP_ATMEGA2560_RAMPS_1_4
       OCR_REGISTER = current_pwm; // Set PWM pin output
+#endif
     
       // On the Uno, spindle enable and PWM are shared, unless otherwise specified.
       #if defined(CPU_MAP_ATMEGA2560) || defined(USE_SPINDLE_DIR_AS_ENABLE_PIN) 
@@ -115,13 +133,17 @@ void spindle_set_state(uint8_t state, float rpm)
           SPINDLE_ENABLE_PORT |= (1<<SPINDLE_ENABLE_BIT);
         #endif
       #endif
-      
-    #else   
+
+          rampsStartSpindle(current_pwm);
+
+    #else
       #ifdef INVERT_SPINDLE_ENABLE_PIN
-		SPINDLE_ENABLE_PORT &= ~(1<<SPINDLE_ENABLE_BIT);
+		//SPINDLE_ENABLE_PORT &= ~(1<<SPINDLE_ENABLE_BIT);
 	  #else
-		SPINDLE_ENABLE_PORT |= (1<<SPINDLE_ENABLE_BIT);
+		//SPINDLE_ENABLE_PORT |= (1<<SPINDLE_ENABLE_BIT);
 	  #endif
+
+          rampsStartSpindle(255);
     #endif
 
   }

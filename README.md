@@ -1,5 +1,69 @@
-![GitHub Logo](/doc/media/Grbl Logo 250px.png)
+![Theolasers logo](/doc/media/theo.png)
 
+***
+
+**Fork of GRBL to support theo-lasers (http://theolasers.com/)
+"A portable laser cutter and engraver for professionals, makers, and educators"**
+
+Provides a laser g-code controller and image engraver including temperature sensor, LCD display and SD card support.
+This functionality requires only an Arduino and other off the shelf components (RAMPS card, LCD module, temperature thermistor).
+Uses code from GRBL for RAMPS 1.4 v1.1 - http://sourceforge.net/projects/grblforramps14/ (Commit [d9dcf0] )
+Uses code from Marlin http://reprap.org/wiki/Marlin
+Adds support for the RepRap Full Graphic Smart Controller - http://reprap.org/wiki/RepRapDiscount_Full_Graphic_Smart_Controller
+
+
+- SD Card support
+  - Stream gcode directly from the SD card
+  - Stream bitmaps/images directly from the SD card - for engraving
+  - Stream jobs can be started/canceled/etc... from gcode/serial/LCD
+- LCD Support
+  - Support for 128x64 display
+  - Display updated asynchronously using interrupt driven display driver
+  - Various fonts 
+  - Full graphical status display
+    - Displays temperature
+    - Displays job progress
+    - Displays position
+    - Displays laser status
+    - etc...
+  - Full graphical menu system using rotary dial
+    - Hierarchical menus
+    - Browsing SD card
+    - Starting/stopping jobs
+    - Setting grbl/job/laser parameters
+    - Jogging laser position
+    - etc...
+- Builds on GRBL for RAMPS to add extra RAMPS support
+  - Laser specific options - laser safety
+  - 10bit speed control for more laser accuracy and improved engraving
+  - Buzzer (sound) support for door open and job start/end
+  - Status LEDs for door open, X/Y axis movement, and laser on warning
+  - Enabled second serial line (one can be used for connecting via cable, and one for Octoprint connection)
+  - GRBL settings stored externally in constants so they can easily added/read/set
+- Added gcode options for "out of the box" Octoprint compatibility
+  - M21/M20/M106/M140 null op for compatibility
+  - M84 Spindle Stop
+  - M105 get temperature
+  - M110 reset to line position
+  - M76 cancel job
+  - M79 report status periodically
+  - Line number, checksum and resend support
+- Temperature sensor support
+  - Lower/upper limits
+  - Automatically pauses job while laser temperature too high
+- Engraving without external software
+  - Reads standard bitmap files directly from the SD card
+  - No gcode conversion phase for engraving - converts bitmap directly into laser movement and pulses
+  - Greatly improves speed and accuracy of engraving (1024 levels of grey by just adjusting power - 10bit)
+  - Engraving scan lines occur at a constant speed for less wear and more accuracy 
+  - Built-in gradient image for calibration
+- Added eclipse project
+  - http://eclipse.baeyens.it/
+  - Easier editing of grbl code
+
+***
+
+![GitHub Logo](/doc/media/Grbl Logo 250px.png)
 
 ***
 

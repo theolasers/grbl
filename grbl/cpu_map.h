@@ -20,7 +20,7 @@
 
 /* The cpu_map.h files serve as a central pin mapping selection file for different processor
    types, i.e. AVR 328p or AVR Mega 2560. Each processor has its own pin mapping file.
-   (i.e. cpu_map_atmega328p.h)  Grbl officially supports the Arduino Uno, but the 
+   (i.e. cpu_map_atmega328p.h)  Grbl officially supports the Arduino Uno, but the
    other supplied pin mappings are supplied by users, so your results may vary. */
 
 // NOTE: With new processors, only add the define name and filename to use.
@@ -35,6 +35,10 @@
 
 #ifdef CPU_MAP_ATMEGA2560 // (Arduino Mega 2560) Working @EliteEng
   #include "cpu_map/cpu_map_atmega2560.h"
+#endif
+
+#ifdef CPU_MAP_ATMEGA2560_RAMPS_1_4 // (Arduino Mega 2560)+Ramps1.4 Working Arsi
+  #include "cpu_map/cpu_map_atmega2560_ramps14.h"
 #endif
 
 /* 

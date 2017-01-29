@@ -24,7 +24,6 @@
 
 #include "grbl.h"
 
-
 // Version of the EEPROM data. Will be used to migrate existing data from older versions of Grbl
 // when firmware is upgraded. Always stored in byte 0 of eeprom
 #define SETTINGS_VERSION 9  // NOTE: Check settings_reset() when moving to next version.
@@ -39,12 +38,20 @@
 #define BITFLAG_INVERT_LIMIT_PINS  bit(6)
 #define BITFLAG_INVERT_PROBE_PIN   bit(7)
 
+// More flags
+#define BITFLAG_BEEPER_ENABLE   bit(1)
+#define BITFLAG_SCREEN_ENABLE   bit(2)
+#define BITFLAG_GC_ECHO_ENABLE  bit(3)
+
 // Define status reporting boolean enable bit flags in settings.status_report_mask
 #define BITFLAG_RT_STATUS_MACHINE_POSITION  bit(0)
 #define BITFLAG_RT_STATUS_WORK_POSITION     bit(1)
 #define BITFLAG_RT_STATUS_PLANNER_BUFFER    bit(2)
 #define BITFLAG_RT_STATUS_SERIAL_RX         bit(3)
 #define BITFLAG_RT_STATUS_LIMIT_PINS        bit(4)
+#define BITFLAG_RT_STATUS_TEMPERATURE       bit(5)
+#define BITFLAG_RT_STATUS_MEMORY            bit(6)
+#define BITFLAG_RT_STATUS_FEED_POWER        bit(7)
 
 // Define settings restore bitflags.
 #define SETTINGS_RESTORE_ALL 0xFF // All bitflags
@@ -75,6 +82,16 @@
 #define AXIS_SETTINGS_START_VAL  100 // NOTE: Reserving settings values >= 100 for axis settings. Up to 255.
 #define AXIS_SETTINGS_INCREMENT  10  // Must be greater than the number of axis settings
 
+// The types used by settings
+#define SETTINGS_TYPE_INT_BASE10 1
+#define SETTINGS_TYPE_INT_BASE2 2
+#define SETTINGS_TYPE_FLOAT 3
+#define SETTINGS_TYPE_BOOL 4
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 // Global persistent settings (Stored from byte EEPROM_ADDR_GLOBAL onwards)
 typedef struct {
   // Axis settings
@@ -91,16 +108,29 @@ typedef struct {
   uint8_t status_report_mask; // Mask to indicate desired report data.
   float junction_deviation;
   float arc_tolerance;
+  float temperature_soft_limit, temperature_hard_limit, temperature_restart_limit;
   
   uint8_t flags;  // Contains default boolean settings
+  uint8_t extraflags;
 
   uint8_t homing_dir_mask;
   float homing_feed_rate;
   float homing_seek_rate;
   uint16_t homing_debounce_delay;
   float homing_pulloff;
+
+  float bitmap_feed_rate, bitmap_return_feed_rate;
+  uint8_t bitmap_low_power, bitmap_high_power;
+  float jog_power;
 } settings_t;
 extern settings_t settings;
+
+typedef struct {
+	uint8_t index;
+	prog_char* description;
+	uint8_t type;
+	float min, max, step;
+} settings_info_t;
 
 // Initialize the configuration subsystem (load settings from EEPROM)
 void settings_init();
@@ -110,6 +140,9 @@ void settings_restore(uint8_t restore_flag);
 
 // A helper method to set new settings from command line
 uint8_t settings_store_global_setting(uint8_t parameter, float value);
+
+// A helper method to fetch settings from command line
+float settings_fetch_global_setting(uint8_t parameter);
 
 // Stores the protocol line variable as a startup line in EEPROM
 void settings_store_startup_line(uint8_t n, char *line);
@@ -138,5 +171,14 @@ uint8_t get_direction_pin_mask(uint8_t i);
 // Returns the limit pin mask according to Grbl's internal axis numbering
 uint8_t get_limit_pin_mask(uint8_t i);
 
+// Returns information about the settings
+// Note: these are indexed 1..n (sequentially and don't use the $ numbers)
+uint8_t get_settings_info_count();
+void get_settings_info(uint8_t i, settings_info_t *info);
+uint8_t get_settings_info_index(uint8_t dolarIndex);
+
+#ifdef __cplusplus
+} // extern "C"
+#endif
 
 #endif

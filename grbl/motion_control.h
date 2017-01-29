@@ -25,6 +25,10 @@
 
 #define HOMING_CYCLE_LINE_NUMBER -1
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 // Execute linear motion in absolute millimeter coordinates. Feed rate given in millimeters/second
 // unless invert_feed_rate is true. Then the feed_rate means that the motion should be completed in
 // (1 minute)/feed_rate time.
@@ -32,6 +36,12 @@
 void mc_line(float *target, float feed_rate, uint8_t invert_feed_rate, int32_t line_number);
 #else
 void mc_line(float *target, float feed_rate, uint8_t invert_feed_rate);
+#endif
+
+#ifdef USE_LINE_NUMBERS
+void mc_line_with_speed(float *target, float feed_rate, uint8_t invert_feed_rate, int32_t line_number, uint16_t spindle_speed, float acceleration);
+#else
+void mc_line_with_speed(float *target, float feed_rate, uint8_t invert_feed_rate, uint16_t spindle_speed, float acceleration);
 #endif
 
 // Execute an arc in offset mode format. position == current xyz, target == target xyz, 
@@ -63,5 +73,9 @@ void mc_probe_cycle(float *target, float feed_rate, uint8_t invert_feed_rate, ui
 
 // Performs system reset. If in motion state, kills all motion and sets system alarm.
 void mc_reset();
+
+#ifdef __cplusplus
+} // extern "C"
+#endif
 
 #endif

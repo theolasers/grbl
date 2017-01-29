@@ -31,9 +31,19 @@
 // mc_line and plan_buffer_line is done primarily to place non-planner-type functions from being
 // in the planner and to let backlash compensation or canned cycle integration simple and direct.
 #ifdef USE_LINE_NUMBERS
-  void mc_line(float *target, float feed_rate, uint8_t invert_feed_rate, int32_t line_number)
+  void mc_line(float *target, float feed_rate, uint8_t invert_feed_rate, int32_t line_number) {
+	  mc_line_with_speed(target, feed_rate, invert_feed_rate, line_number, 0, 0.0f);
+  }
 #else
-  void mc_line(float *target, float feed_rate, uint8_t invert_feed_rate)
+  void mc_line(float *target, float feed_rate, uint8_t invert_feed_rate) {
+	  mc_line_with_speed(target, feed_rate, invert_feed_rate, 0, 0.0f);
+  }
+#endif
+
+#ifdef USE_LINE_NUMBERS
+void mc_line_with_speed(float *target, float feed_rate, uint8_t invert_feed_rate, int32_t line_number, uint16_t spindle_speed, float acceleration)
+#else
+void mc_line_with_speed(float *target, float feed_rate, uint8_t invert_feed_rate, uint16_t spindle_speed, float acceleration)
 #endif
 {
   // If enabled, check for soft limit violations. Placed here all line motions are picked up
@@ -68,9 +78,9 @@
 
   // Plan and queue motion into planner buffer
   #ifdef USE_LINE_NUMBERS
-    plan_buffer_line(target, feed_rate, invert_feed_rate, line_number);
+    plan_buffer_line_with_speed(target, feed_rate, invert_feed_rate, line_number, spindle_speed, acceleration);
   #else
-    plan_buffer_line(target, feed_rate, invert_feed_rate);
+    plan_buffer_line_with_speed(target, feed_rate, invert_feed_rate, spindle_speed, acceleration);
   #endif
 }
 
@@ -270,6 +280,8 @@ void mc_homing_cycle()
     uint8_t is_no_error)
 #endif
 { 
+#ifdef PROBE_DDR
+
   // TODO: Need to update this cycle so it obeys a non-auto cycle start.
   if (sys.state == STATE_CHECK_MODE) { return; }
 
@@ -331,6 +343,8 @@ void mc_homing_cycle()
     // All done! Output the probe position as message.
     report_probe_parameters();
   #endif
+
+#endif
 }
 
 

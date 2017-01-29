@@ -20,7 +20,11 @@
 */
   
 #include "grbl.h"
+#include "ramps.h"
+#include "fastio.h"
+#include "print.h"
 
+static bool hardLimitsEnabled = true;
 
 // Homing axis search distance multiplier. Computed by this value times the cycle travel.
 #ifndef HOMING_AXIS_SEARCH_SCALAR
@@ -32,7 +36,14 @@
 
 void limits_init() 
 {
-  LIMIT_DDR &= ~(LIMIT_MASK); // Set as input pins
+#ifdef CPU_MAP_ATMEGA2560_RAMPS_1_4
+	rampsInitLimits();
+#else
+
+
+  /* Ramps disabled as limit switches can be on different ports / pins now */
+
+   LIMIT_DDR &= ~(LIMIT_MASK); // Set as input pins
 
   #ifdef DISABLE_LIMIT_PIN_PULL_UP
     LIMIT_PORT &= ~(LIMIT_MASK); // Normal low operation. Requires external pull-down.
@@ -40,12 +51,16 @@ void limits_init()
     LIMIT_PORT |= (LIMIT_MASK);  // Enable internal pull-up resistors. Normal high operation.
   #endif
 
+
+	// Ramps disabled interupts, we check in the cycle now instead since we can't rely on using pins on the same port
+
   if (bit_istrue(settings.flags,BITFLAG_HARD_LIMIT_ENABLE)) {
     LIMIT_PCMSK |= LIMIT_MASK; // Enable specific pins of the Pin Change Interrupt
     PCICR |= (1 << LIMIT_INT); // Enable Pin Change Interrupt
   } else {
     limits_disable(); 
   }
+#endif
   
   #ifdef ENABLE_SOFTWARE_DEBOUNCE
     MCUSR &= ~(1<<WDRF);
@@ -58,8 +73,10 @@ void limits_init()
 // Disables hard limits.
 void limits_disable()
 {
+#ifndef CPU_MAP_ATMEGA2560_RAMPS_1_4
   LIMIT_PCMSK &= ~LIMIT_MASK;  // Disable specific pins of the Pin Change Interrupt
   PCICR &= ~(1 << LIMIT_INT);  // Disable Pin Change Interrupt
+#endif
 }
 
 
@@ -69,17 +86,96 @@ void limits_disable()
 uint8_t limits_get_state()
 {
   uint8_t limit_state = 0;
-  uint8_t pin = (LIMIT_PIN & LIMIT_MASK);
-  if (bit_isfalse(settings.flags,BITFLAG_INVERT_LIMIT_PINS)) { pin ^= LIMIT_MASK; }
-  if (pin) {  
-	uint8_t idx;
-	for (idx=0; idx<N_AXIS; idx++) {
-	  if (pin & get_limit_pin_mask(idx)) { limit_state |= (1 << idx); }
-	}
-  }
+  //uint8_t pin = (LIMIT_PIN & LIMIT_MASK);
+  //if (bit_isfalse(settings.flags,BITFLAG_INVERT_LIMIT_PINS)) { pin ^= LIMIT_MASK; }
+  //if (pin) {
+#ifdef X_MIN_PIN
+			if (!READ(X_MIN_PIN)) {
+				limit_state |= (1 << X_AXIS);
+			}
+#endif
+#ifdef X_MAX_PIN
+			if (!READ(X_MAX_PIN)) {
+				limit_state |= (1 << X_AXIS);
+			}
+#endif
+#ifdef Y_MIN_PIN
+			if (!READ(Y_MIN_PIN)) {
+				limit_state |= (1 << Y_AXIS);
+			}
+#endif
+#ifdef Y_MAX_PIN
+			if (!READ(Y_MAX_PIN)) {
+				limit_state |= (1 << Y_AXIS);
+			}
+#endif
+#ifdef Z_MIN_PIN
+			if (!READ(Z_MIN_PIN)) {
+				limit_state |= (1 << Z_AXIS);
+			}
+#endif
+#ifdef Z_MAX_PIN
+			if (!READ(Z_MAX_PIN)) {
+				limit_state |= (1 << Z_AXIS);
+			}
+#endif
+
+
+	  //if (pin & get_limit_pin_mask(idx)) { limit_state |= (1 << idx); }
+	//}
   return(limit_state);
 }
 
+// Returns limit state as a bit-wise uint8 variable. Each bit indicates an axis limit, where
+// triggered is 1 and not triggered is 0. Invert mask is applied. Axes are defined by their
+// number in bit position, i.e. Z_AXIS is (1<<2) or bit 2, and Y_AXIS is (1<<1) or bit 1.
+uint8_t limits_get_state_direction(uint8_t step_outbits, uint8_t dir_outbits)
+{
+	if (!hardLimitsEnabled || bit_isfalse(settings.flags,BITFLAG_HARD_LIMIT_ENABLE)) return 0;
+
+  uint8_t limit_state = 0;
+
+#ifdef X_MIN_PIN
+  if (CHECK(step_outbits, X_STEP_BIT) && CHECK(dir_outbits, X_DIRECTION_BIT)) {
+			if (!READ(X_MIN_PIN)) {
+				limit_state |= (1 << X_AXIS);
+			}
+  }
+#endif
+#ifdef X_MAX_PIN
+	if (CHECK(step_outbits, X_STEP_BIT) && !CHECK(dir_outbits, X_DIRECTION_BIT)) {
+			if (!READ(X_MAX_PIN)) {
+				limit_state |= (1 << (X_AXIS + N_AXIS));
+			}
+	}
+#endif
+#ifdef Y_MIN_PIN
+	if (CHECK(step_outbits, Y_STEP_BIT) && !CHECK(dir_outbits, Y_DIRECTION_BIT)) {
+			if (!READ(Y_MIN_PIN)) {
+				limit_state |= (1 << Y_AXIS);
+			}
+	}
+#endif
+#ifdef Y_MAX_PIN
+	if (CHECK(step_outbits, Y_STEP_BIT) && CHECK(dir_outbits, Y_DIRECTION_BIT)) {
+			if (!READ(Y_MAX_PIN)) {
+				limit_state |= (1 << (Y_AXIS + N_AXIS));
+			}
+	}
+#endif
+#ifdef Z_MIN_PIN
+			if (!READ(Z_MIN_PIN)) {
+				limit_state |= (1 << Z_AXIS);
+			}
+#endif
+#ifdef Z_MAX_PIN
+			if (!READ(Z_MAX_PIN)) {
+				limit_state |= (1 << (Z_AXIS + N_AXIS));
+			}
+#endif
+
+  return(limit_state);
+}
 
 // This is the Limit Pin Change Interrupt, which handles the hard limit feature. A bouncing 
 // limit switch can cause a lot of problems, like false readings and multiple interrupt calls.
@@ -92,6 +188,7 @@ uint8_t limits_get_state()
 // homing cycles and will not respond correctly. Upon user request or need, there may be a
 // special pinout for an e-stop, but it is generally recommended to just directly connect
 // your e-stop switch to the Arduino reset pin, since it is the most correct way to do this.
+#ifndef CPU_MAP_ATMEGA2560_RAMPS_1_4
 #ifndef ENABLE_SOFTWARE_DEBOUNCE
   ISR(LIMIT_INT_vect) // DEFAULT: Limit pin change interrupt process. 
   {
@@ -132,7 +229,7 @@ uint8_t limits_get_state()
     }
   }
 #endif
-
+#endif
  
 // Homes the specified cycle axes, sets the machine position, and performs a pull-off motion after
 // completing. Homing is a special motion case, which involves rapid uncontrolled stops to locate
@@ -144,6 +241,8 @@ uint8_t limits_get_state()
 void limits_go_home(uint8_t cycle_mask) 
 {
   if (sys.abort) { return; } // Block if system reset has been issued.
+
+  hardLimitsEnabled = false;
 
   // Initialize
   uint8_t n_cycle = (2*N_HOMING_LOCATE_CYCLE+1);
@@ -232,6 +331,7 @@ void limits_go_home(uint8_t cycle_mask)
 		     ( approach && (sys_rt_exec_state & EXEC_CYCLE_STOP)) ) { // Limit switch not found during approach.
      	  mc_reset(); // Stop motors, if they are running.
 		  protocol_execute_realtime();
+		  hardLimitsEnabled = true;
 		  return;
 		} else {
 		  // Pull-off motion complete. Disable CYCLE_STOP from executing.
@@ -305,6 +405,7 @@ void limits_go_home(uint8_t cycle_mask)
   }
   plan_sync_position(); // Sync planner position to homed machine position.
     
+  hardLimitsEnabled = true;
   // sys.state = STATE_HOMING; // Ensure system state set as homing before returning. 
 }
 

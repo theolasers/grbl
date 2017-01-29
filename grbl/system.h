@@ -23,6 +23,10 @@
 
 #include "grbl.h"
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 // Define system executor bit map. Used internally by realtime protocol as realtime command flags, 
 // which notifies the main program to execute the specified realtime command asynchronously.
 // NOTE: The system executor uses an unsigned 8-bit volatile variable (8 flag limit.) The default
@@ -34,7 +38,8 @@
 #define EXEC_FEED_HOLD      bit(3) // bitmask 00001000
 #define EXEC_RESET          bit(4) // bitmask 00010000
 #define EXEC_SAFETY_DOOR    bit(5) // bitmask 00100000
-#define EXEC_MOTION_CANCEL  bit(6) // bitmask 01000000
+#define EXEC_TEMPERATURE    bit(6) // bitmask 01000000
+#define EXEC_MENU           bit(7) // bitmask 10000000
 
 // Alarm executor bit map.
 // NOTE: EXEC_CRITICAL_EVENT is an optional flag that must be set with an alarm flag. When enabled,
@@ -46,6 +51,7 @@
 #define EXEC_ALARM_ABORT_CYCLE  bit(3) // bitmask 00001000
 #define EXEC_ALARM_PROBE_FAIL   bit(4) // bitmask 00010000
 #define EXEC_ALARM_HOMING_FAIL  bit(5) // bitmask 00100000
+#define EXEC_ALARM_TEMP_ERROR   bit(6) // bitmask 01000000
 
 // Define system state bit map. The state variable primarily tracks the individual functions
 // of Grbl to manage each without overlapping. It is also used as a messaging flag for
@@ -57,7 +63,7 @@
 #define STATE_CYCLE         bit(3) // Cycle is running or motions are being executed.
 #define STATE_HOLD          bit(4) // Active feed hold
 #define STATE_SAFETY_DOOR   bit(5) // Safety door is ajar. Feed holds and de-energizes system.
-#define STATE_MOTION_CANCEL bit(6) // Motion cancel by feed hold and return to idle. 
+#define STATE_TEMPERATURE   bit(6) // Motion cancel by feed hold and return to idle.
 
 // Define system suspend states.
 #define SUSPEND_DISABLE       0      // Must be zero.
@@ -82,9 +88,9 @@ typedef struct {
 } system_t;
 extern system_t sys;
 
-volatile uint8_t sys_probe_state;   // Probing state value.  Used to coordinate the probing cycle with stepper ISR.
-volatile uint8_t sys_rt_exec_state;  // Global realtime executor bitflag variable for state management. See EXEC bitmasks.
-volatile uint8_t sys_rt_exec_alarm;  // Global realtime executor bitflag variable for setting various alarms.
+extern volatile uint8_t sys_probe_state;   // Probing state value.  Used to coordinate the probing cycle with stepper ISR.
+extern volatile uint8_t sys_rt_exec_state;  // Global realtime executor bitflag variable for state management. See EXEC bitmasks.
+extern volatile uint8_t sys_rt_exec_alarm;  // Global realtime executor bitflag variable for setting various alarms.
 
 
 // Initialize the serial protocol
@@ -97,12 +103,18 @@ uint8_t system_check_safety_door_ajar();
 uint8_t system_execute_line(char *line);
 
 // Execute the startup script lines stored in EEPROM upon initialization
-void system_execute_startup(char *line);
+void system_execute_startup();
+int system_execute_home();
+void system_execute_unlock();
 
 // Returns machine position of axis 'idx'. Must be sent a 'step' array.
 float system_convert_axis_steps_to_mpos(int32_t *steps, uint8_t idx);
 
 // Updates a machine 'position' array based on the 'step' array sent.
 void system_convert_array_steps_to_mpos(float *position, int32_t *steps);
+
+#ifdef __cplusplus
+} // extern "C"
+#endif
 
 #endif

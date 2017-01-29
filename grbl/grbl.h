@@ -23,7 +23,7 @@
 
 // Grbl versioning system
 #define GRBL_VERSION "0.9j"
-#define GRBL_VERSION_BUILD "20150930"
+#define GRBL_VERSION_BUILD "20160329"
 
 // Define standard libraries used by Grbl.
 #include <avr/io.h>
@@ -58,5 +58,8 @@
 #include "serial.h"
 #include "spindle_control.h"
 #include "stepper.h"
+#include "temperature.h"
+#include "screen.h"
+#include "card.h"
 
 #endif

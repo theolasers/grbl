@@ -27,7 +27,53 @@
 */
 
 #include "grbl.h"
+#include "MemoryFree.h"
 
+static void storeFloat(float n, uint8_t decimal_places, char *dest) {
+	uint8_t decimals = decimal_places;
+	while (decimals >= 2) { // Quickly convert values expected to be E0 to E-4.
+		n *= 100;
+		decimals -= 2;
+	}
+	if (decimals) {
+		n *= 10;
+	}
+	n += 0.5; // Add rounding factor. Ensures carryover through entire value.
+
+	char buf[10];
+	uint8_t i = 0;
+	if (n < 0) {
+		decimal_places++;
+		buf[i++] = '-';
+		n = -n;
+	}
+
+	// Generate digits backwards and store in string.
+	uint32_t a = (long) n;
+	buf[decimal_places] = '.'; // Place decimal point, even if decimal places are zero.
+	while (a > 0) {
+		if (i == decimal_places) {
+			i++;
+		} // Skip decimal point location
+		buf[i++] = (a % 10) + '0'; // Get digit
+		a /= 10;
+	}
+	while (i < decimal_places) {
+		buf[i++] = '0'; // Fill in zeros to decimal point for (n < 1)
+	}
+	if (i == decimal_places) { // Fill in leading zero, if needed.
+		i++;
+		buf[i++] = '0';
+	}
+
+	while (*dest) ++dest;
+
+	  // Print the generated string.
+	  for (; i > 0; i--) {
+	    *dest++ = (buf[i-1]);
+	  }
+	  *dest = '\0';
+}
 
 // Handles the primary confirmation protocol response for streaming interfaces and human-feedback.
 // For every incoming line, this method responds with an 'ok' for a successful command or an 
@@ -41,8 +87,12 @@ void report_status_message(uint8_t status_code)
 {
   if (status_code == 0) { // STATUS_OK
     printPgmString(PSTR("ok\r\n"));
+  } else if (status_code == STATUS_BINARY_OK) {
+	  printPgmString(PSTR("Bok\r\n"));
+  } else if (status_code == STATUS_NO_RESPONSE) {
+	  // Suprress response
   } else {
-    printPgmString(PSTR("error: "));
+    printPgmString(PSTR("Error: "));
     #ifdef REPORT_GUI_MODE
       print_uint8_base10(status_code);
     #else
@@ -69,6 +119,14 @@ void report_status_message(uint8_t status_code)
         printPgmString(PSTR("Homing not enabled")); break;
         case STATUS_OVERFLOW:
         printPgmString(PSTR("Line overflow")); break;
+        case STATUS_CHECKSUM:
+        printPgmString(PSTR("Checksum mismatch")); break;
+        case STATUS_NO_STREAM:
+        printPgmString(PSTR("No binary stream in progress")); break;
+        case STATUS_STREAM_FULL:
+        printPgmString(PSTR("Binary stream buffer full")); break;
+        case STATUS_NO_LINE_NUMBER:
+        printPgmString(PSTR("No Line Number with checksum")); break;
         #ifdef MAX_STEP_RATE_HZ
           case STATUS_MAX_STEP_RATE_EXCEEDED: 
           printPgmString(PSTR("Step rate > 30kHz")); break;
@@ -108,6 +166,8 @@ void report_alarm_message(int8_t alarm_code)
       printPgmString(PSTR("Probe fail")); break;
       case ALARM_HOMING_FAIL:
       printPgmString(PSTR("Homing fail")); break;
+      case ALARM_TEMP_ERROR:
+      printPgmString(PSTR("Temperature Limit")); break;
     }
   #endif
   printPgmString(PSTR("\r\n"));
@@ -148,7 +208,7 @@ void report_feedback_message(uint8_t message_code)
 // Welcome message
 void report_init_message()
 {
-  printPgmString(PSTR("\r\nGrbl " GRBL_VERSION " ['$' for help]\r\n"));
+  printPgmString(PSTR("\r\nGrbl RAMPS " GRBL_VERSION " ['$' for help]\r\n"));
 }
 
 // Grbl help message
@@ -175,91 +235,110 @@ void report_grbl_help() {
 // Grbl global settings print out.
 // NOTE: The numbering scheme here must correlate to storing in settings.c
 void report_grbl_settings() {
-  // Print Grbl settings.
-  #ifdef REPORT_GUI_MODE
-    printPgmString(PSTR("$0=")); print_uint8_base10(settings.pulse_microseconds);
-    printPgmString(PSTR("\r\n$1=")); print_uint8_base10(settings.stepper_idle_lock_time);
-    printPgmString(PSTR("\r\n$2=")); print_uint8_base10(settings.step_invert_mask); 
-    printPgmString(PSTR("\r\n$3=")); print_uint8_base10(settings.dir_invert_mask); 
-    printPgmString(PSTR("\r\n$4=")); print_uint8_base10(bit_istrue(settings.flags,BITFLAG_INVERT_ST_ENABLE));
-    printPgmString(PSTR("\r\n$5=")); print_uint8_base10(bit_istrue(settings.flags,BITFLAG_INVERT_LIMIT_PINS));
-    printPgmString(PSTR("\r\n$6=")); print_uint8_base10(bit_istrue(settings.flags,BITFLAG_INVERT_PROBE_PIN));
-    printPgmString(PSTR("\r\n$10=")); print_uint8_base10(settings.status_report_mask);
-    printPgmString(PSTR("\r\n$11=")); printFloat_SettingValue(settings.junction_deviation);
-    printPgmString(PSTR("\r\n$12=")); printFloat_SettingValue(settings.arc_tolerance);
-    printPgmString(PSTR("\r\n$13=")); print_uint8_base10(bit_istrue(settings.flags,BITFLAG_REPORT_INCHES));
-    printPgmString(PSTR("\r\n$20=")); print_uint8_base10(bit_istrue(settings.flags,BITFLAG_SOFT_LIMIT_ENABLE));
-    printPgmString(PSTR("\r\n$21=")); print_uint8_base10(bit_istrue(settings.flags,BITFLAG_HARD_LIMIT_ENABLE));
-    printPgmString(PSTR("\r\n$22=")); print_uint8_base10(bit_istrue(settings.flags,BITFLAG_HOMING_ENABLE));
-    printPgmString(PSTR("\r\n$23=")); print_uint8_base10(settings.homing_dir_mask);
-    printPgmString(PSTR("\r\n$24=")); printFloat_SettingValue(settings.homing_feed_rate);
-    printPgmString(PSTR("\r\n$25=")); printFloat_SettingValue(settings.homing_seek_rate);
-    printPgmString(PSTR("\r\n$26=")); print_uint8_base10(settings.homing_debounce_delay);
-    printPgmString(PSTR("\r\n$27=")); printFloat_SettingValue(settings.homing_pulloff);
-    printPgmString(PSTR("\r\n"));
-  #else      
-    printPgmString(PSTR("$0=")); print_uint8_base10(settings.pulse_microseconds);
-    printPgmString(PSTR(" (step pulse, usec)\r\n$1=")); print_uint8_base10(settings.stepper_idle_lock_time);
-    printPgmString(PSTR(" (step idle delay, msec)\r\n$2=")); print_uint8_base10(settings.step_invert_mask); 
-    printPgmString(PSTR(" (step port invert mask:")); print_uint8_base2(settings.step_invert_mask);  
-    printPgmString(PSTR(")\r\n$3=")); print_uint8_base10(settings.dir_invert_mask); 
-    printPgmString(PSTR(" (dir port invert mask:")); print_uint8_base2(settings.dir_invert_mask);  
-    printPgmString(PSTR(")\r\n$4=")); print_uint8_base10(bit_istrue(settings.flags,BITFLAG_INVERT_ST_ENABLE));
-    printPgmString(PSTR(" (step enable invert, bool)\r\n$5=")); print_uint8_base10(bit_istrue(settings.flags,BITFLAG_INVERT_LIMIT_PINS));
-    printPgmString(PSTR(" (limit pins invert, bool)\r\n$6=")); print_uint8_base10(bit_istrue(settings.flags,BITFLAG_INVERT_PROBE_PIN));
-    printPgmString(PSTR(" (probe pin invert, bool)\r\n$10=")); print_uint8_base10(settings.status_report_mask);
-    printPgmString(PSTR(" (status report mask:")); print_uint8_base2(settings.status_report_mask);
-    printPgmString(PSTR(")\r\n$11=")); printFloat_SettingValue(settings.junction_deviation);
-    printPgmString(PSTR(" (junction deviation, mm)\r\n$12=")); printFloat_SettingValue(settings.arc_tolerance);
-    printPgmString(PSTR(" (arc tolerance, mm)\r\n$13=")); print_uint8_base10(bit_istrue(settings.flags,BITFLAG_REPORT_INCHES));
-    printPgmString(PSTR(" (report inches, bool)\r\n$20=")); print_uint8_base10(bit_istrue(settings.flags,BITFLAG_SOFT_LIMIT_ENABLE));
-    printPgmString(PSTR(" (soft limits, bool)\r\n$21=")); print_uint8_base10(bit_istrue(settings.flags,BITFLAG_HARD_LIMIT_ENABLE));
-    printPgmString(PSTR(" (hard limits, bool)\r\n$22=")); print_uint8_base10(bit_istrue(settings.flags,BITFLAG_HOMING_ENABLE));
-    printPgmString(PSTR(" (homing cycle, bool)\r\n$23=")); print_uint8_base10(settings.homing_dir_mask);
-    printPgmString(PSTR(" (homing dir invert mask:")); print_uint8_base2(settings.homing_dir_mask);  
-    printPgmString(PSTR(")\r\n$24=")); printFloat_SettingValue(settings.homing_feed_rate);
-    printPgmString(PSTR(" (homing feed, mm/min)\r\n$25=")); printFloat_SettingValue(settings.homing_seek_rate);
-    printPgmString(PSTR(" (homing seek, mm/min)\r\n$26=")); print_uint8_base10(settings.homing_debounce_delay);
-    printPgmString(PSTR(" (homing debounce, msec)\r\n$27=")); printFloat_SettingValue(settings.homing_pulloff);
-    printPgmString(PSTR(" (homing pull-off, mm)\r\n"));
-  #endif
-  
-  // Print axis settings
-  uint8_t idx, set_idx;
-  uint8_t val = AXIS_SETTINGS_START_VAL;
-  for (set_idx=0; set_idx<AXIS_N_SETTINGS; set_idx++) {
-    for (idx=0; idx<N_AXIS; idx++) {
-      printPgmString(PSTR("$"));
-      print_uint8_base10(val+idx);
-      printPgmString(PSTR("="));
-      switch (set_idx) {
-        case 0: printFloat_SettingValue(settings.steps_per_mm[idx]); break;
-        case 1: printFloat_SettingValue(settings.max_rate[idx]); break;
-        case 2: printFloat_SettingValue(settings.acceleration[idx]/(60*60)); break;
-        case 3: printFloat_SettingValue(-settings.max_travel[idx]); break;
-      }
-      #ifdef REPORT_GUI_MODE
-        printPgmString(PSTR("\r\n"));
-      #else
-        printPgmString(PSTR(" ("));
-        switch (idx) {
-          case X_AXIS: printPgmString(PSTR("x")); break;
-          case Y_AXIS: printPgmString(PSTR("y")); break;
-          case Z_AXIS: printPgmString(PSTR("z")); break;
-        }
-        switch (set_idx) {
-          case 0: printPgmString(PSTR(", step/mm")); break;
-          case 1: printPgmString(PSTR(" max rate, mm/min")); break;
-          case 2: printPgmString(PSTR(" accel, mm/sec^2")); break;
-          case 3: printPgmString(PSTR(" max travel, mm")); break;
-        }      
-        printPgmString(PSTR(")\r\n"));
-      #endif
-    }
-    val += AXIS_SETTINGS_INCREMENT;
-  }  
+	uint8_t i;
+	for (i=0; i<get_settings_info_count(); i++) {
+		settings_info_t settings_info;
+		get_settings_info(i, &settings_info);
+		uint8_t idx = settings_info.index;
+		printPgmString(PSTR("$"));
+		print_uint8_base10(idx);
+		printPgmString(PSTR("="));
+		float value = settings_fetch_global_setting(idx);
+		uint8_t intVal = trunc(value);
+		switch (settings_info.type) {
+		case SETTINGS_TYPE_INT_BASE10:
+			print_uint8_base10(intVal);
+			break;
+		case SETTINGS_TYPE_INT_BASE2:
+			print_uint8_base10(intVal);
+			break;
+		case SETTINGS_TYPE_BOOL:
+			print_uint8_base10(intVal);
+			break;
+		case SETTINGS_TYPE_FLOAT:
+			printFloat_SettingValue(value);
+			break;
+		}
+
+#ifndef REPORT_GUI_MODE
+		printPgmString(PSTR(" ("));
+		printPgmString(settings_info.description);
+
+		switch (settings_info.type) {
+		case SETTINGS_TYPE_INT_BASE10:
+			break;
+		case SETTINGS_TYPE_INT_BASE2:
+			printPgmString(PSTR(" mask:"));
+			print_uint8_base2(intVal);
+			break;
+		case SETTINGS_TYPE_BOOL:
+			printPgmString(PSTR(", bool"));
+			break;
+		case SETTINGS_TYPE_FLOAT:
+			break;
+		}
+		printPgmString(PSTR(")"));
+#endif
+
+		printPgmString(PSTR("\r\n"));
+	}
 }
 
+void report_grbl_settings_readable() {
+	uint8_t i;
+	for (i=0; i<get_settings_info_count(); i++) {
+		settings_info_t settings_info;
+		get_settings_info(i, &settings_info);
+		uint8_t idx = settings_info.index;
+
+		char buffer[256];
+
+		strcpy_P(buffer, PSTR("$"));
+		storeFloat(idx, 1, buffer);
+		strcat_P(buffer, PSTR("="));
+		float value = settings_fetch_global_setting(idx);
+		storeFloat(value, N_DECIMAL_SETTINGVALUE, buffer);
+
+		strcat_P(buffer, PSTR(" ("));
+		strcat_P(buffer, settings_info.description);
+		strcat_P(buffer, PSTR(")"));
+
+		strcat_P(buffer, PSTR(" ("));
+		switch (settings_info.type) {
+		case SETTINGS_TYPE_INT_BASE10:
+			strcat_P(buffer, PSTR("int,"));
+			break;
+		case SETTINGS_TYPE_INT_BASE2:
+			strcat_P(buffer, PSTR("mask,"));
+			break;
+		case SETTINGS_TYPE_BOOL:
+			strcat_P(buffer, PSTR("bool,"));
+			break;
+		case SETTINGS_TYPE_FLOAT:
+			strcat_P(buffer, PSTR("float,"));
+			break;
+		}
+		storeFloat(settings_info.min, N_DECIMAL_SETTINGVALUE, buffer);
+		strcat_P(buffer, PSTR(","));
+		storeFloat(settings_info.max, N_DECIMAL_SETTINGVALUE, buffer);
+		strcat_P(buffer, PSTR(","));
+		storeFloat(settings_info.step, N_DECIMAL_SETTINGVALUE, buffer);
+		strcat_P(buffer, PSTR(")"));
+
+		printString(buffer);
+
+		char *b;
+		uint8_t chkSum = 0;
+		for (b=buffer; *b; b++) {
+			chkSum ^= *b;
+		}
+
+		printPgmString(PSTR(" ("));
+		print_uint8_base10(chkSum);
+		printPgmString(PSTR(")"));
+		printPgmString(PSTR("\r\n"));
+	}
+}
 
 // Prints current probe parameters. Upon a probe command, these parameters are updated upon a
 // successful probe or upon a failed probe with the G38.3 without errors command (if supported). 
@@ -432,7 +511,7 @@ void report_realtime_status()
   // Report current machine state
   switch (sys.state) {
     case STATE_IDLE: printPgmString(PSTR("<Idle")); break;
-    case STATE_MOTION_CANCEL: // Report run state.
+    case STATE_TEMPERATURE: printPgmString(PSTR("<Temp")); break;
     case STATE_CYCLE: printPgmString(PSTR("<Run")); break;
     case STATE_HOLD: printPgmString(PSTR("<Hold")); break;
     case STATE_HOMING: printPgmString(PSTR("<Home")); break;
@@ -442,7 +521,7 @@ void report_realtime_status()
   }
  
   // If reporting a position, convert the current step count (current_position) to millimeters.
-  if (bit_istrue(settings.status_report_mask,(BITFLAG_RT_STATUS_MACHINE_POSITION | BITFLAG_RT_STATUS_WORK_POSITION))) {
+  if (bit_istrue(settings.status_report_mask,(BITFLAG_RT_STATUS_MACHINE_POSITION | BITFLAG_RT_STATUS_WORK_POSITION | BITFLAG_RT_STATUS_TEMPERATURE))) {
     system_convert_array_steps_to_mpos(print_position,current_position);
   }
   
@@ -501,10 +580,39 @@ void report_realtime_status()
     print_unsigned_int8(limits_get_state(),2,N_AXIS);
   }
   
+  if (bit_istrue(settings.status_report_mask,BITFLAG_RT_STATUS_FEED_POWER)) {
+    printPgmString(PSTR(",P:"));
+    printInteger((int) gc_state.spindle_speed);
+    printPgmString(PSTR(",F:"));
+    printInteger((int) gc_state.feed_rate);
+  }
+
+  if (bit_istrue(settings.status_report_mask,BITFLAG_RT_STATUS_TEMPERATURE)) {
+    printPgmString(PSTR(",Temp:"));
+    printFloat(get_current_temperature(), 1);
+    printPgmString(PSTR("/"));
+    printFloat(settings.temperature_soft_limit, 1);
+  }
+
+  if (bit_istrue(settings.status_report_mask,BITFLAG_RT_STATUS_MEMORY)) {
+    printPgmString(PSTR(",FreeMemory:"));
+    printInteger(freeMemory());
+  }
+
   #ifdef REPORT_CONTROL_PIN_STATE 
     printPgmString(PSTR(",Ctl:"));
     print_uint8_base2(CONTROL_PIN & CONTROL_MASK);
   #endif
   
   printPgmString(PSTR(">\r\n"));
+}
+
+static uint8_t report_automatic_status_flag = false;
+
+void report_automatic_status(uint8_t on) {
+	report_automatic_status_flag = on;
+}
+
+uint8_t get_report_automatic_status() {
+	return report_automatic_status_flag;
 }

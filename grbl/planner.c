@@ -252,10 +252,20 @@ uint8_t plan_check_full_buffer()
    is used in three ways: as a normal feed rate if invert_feed_rate is false, as inverse time if
    invert_feed_rate is true, or as seek/rapids rate if the feed_rate value is negative (and
    invert_feed_rate always false). */
-#ifdef USE_LINE_NUMBERS   
-  void plan_buffer_line(float *target, float feed_rate, uint8_t invert_feed_rate, int32_t line_number) 
+#ifdef USE_LINE_NUMBERS
+  void plan_buffer_line(float *target, float feed_rate, uint8_t invert_feed_rate, int32_t line_number) {
+	  plan_buffer_line_with_speed(target, feed_rate, invert_feed_rate, line_number, 0, 0.0f);
+  }
 #else
-  void plan_buffer_line(float *target, float feed_rate, uint8_t invert_feed_rate) 
+  void plan_buffer_line(float *target, float feed_rate, uint8_t invert_feed_rate) {
+	  plan_buffer_line_with_speed(target, feed_rate, invert_feed_rate, 0, 0.0f);
+  }
+#endif
+
+#ifdef USE_LINE_NUMBERS
+  void plan_buffer_line_with_speed(float *target, float feed_rate, uint8_t invert_feed_rate, int32_t line_number, uint16_t plan_spindle_speed, float acceleration)
+#else
+  void plan_buffer_line_with_speed(float *target, float feed_rate, uint8_t invert_feed_rate, uint16_t plan_spindle_speed, float acceleration)
 #endif
 {
   // Prepare and initialize new block
@@ -263,6 +273,7 @@ uint8_t plan_check_full_buffer()
   block->step_event_count = 0;
   block->millimeters = 0;
   block->direction_bits = 0;
+  block->plan_spindle_speed = plan_spindle_speed;
   block->acceleration = SOME_LARGE_VALUE; // Scaled down to maximum acceleration later
   #ifdef USE_LINE_NUMBERS
     block->line_number = line_number;
@@ -337,7 +348,10 @@ uint8_t plan_check_full_buffer()
 
       // Check and limit feed rate against max individual axis velocities and accelerations
       feed_rate = min(feed_rate,settings.max_rate[idx]*inverse_unit_vec_value);
-      block->acceleration = min(block->acceleration,settings.acceleration[idx]*inverse_unit_vec_value);
+
+      float used_acceleration = acceleration;
+      if (used_acceleration == 0) used_acceleration = settings.acceleration[idx];
+      block->acceleration = min(block->acceleration,used_acceleration*inverse_unit_vec_value);
 
       // Incrementally compute cosine of angle between previous and current path. Cos(theta) of the junction
       // between the current move and the previous move is simply the dot product of the two unit vectors, 

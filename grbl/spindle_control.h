@@ -22,6 +22,9 @@
 #ifndef spindle_control_h
 #define spindle_control_h 
 
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 // Initializes spindle pins and hardware PWM, if enabled.
 void spindle_init();
@@ -33,5 +36,9 @@ void spindle_set_state(uint8_t state, float rpm);
 
 // Kills spindle.
 void spindle_stop();
+
+#ifdef __cplusplus
+} // extern "C"
+#endif
 
 #endif

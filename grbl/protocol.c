@@ -20,20 +20,14 @@
 */
 
 #include "grbl.h"
-
-// Define different comment types for pre-parsing.
-#define COMMENT_NONE 0
-#define COMMENT_TYPE_PARENTHESES 1
-#define COMMENT_TYPE_SEMICOLON 2
-
-
-static char line[LINE_BUFFER_SIZE]; // Line to be executed. Zero-terminated.
-
+#include "fastio.h"
+#include "protocol_parser_intf.h"
+#include "Tone.h"
 
 // Directs and executes one line of formatted input from protocol_process. While mostly
 // incoming streaming g-code blocks, this also directs and executes Grbl internal commands,
 // such as settings, initiating the homing cycle, and toggling switch states.
-static void protocol_execute_line(char *line) 
+void protocol_execute_line(char *line)
 {      
   protocol_execute_realtime(); // Runtime command check point.
   if (sys.abort) { return; } // Bail to calling function upon system abort  
@@ -84,90 +78,56 @@ void protocol_main_loop()
     } else {
       sys.state = STATE_IDLE; // Set system to ready. Clear all state flags.
     } 
-    system_execute_startup(line); // Execute startup script.
+    system_execute_startup(); // Execute startup script.
   }
     
   // ---------------------------------------------------------------------------------  
   // Primary loop! Upon a system abort, this exits back to main() to reset the system. 
   // ---------------------------------------------------------------------------------  
   
-  uint8_t comment = COMMENT_NONE;
-  uint8_t char_counter = 0;
-  uint8_t c;
+
   for (;;) {
+	protocol_parse_serial();
 
-    // Process one line of incoming serial data, as the data becomes available. Performs an
-    // initial filtering by removing spaces and comments and capitalizing all letters.
-    
-    // NOTE: While comment, spaces, and block delete(if supported) handling should technically 
-    // be done in the g-code parser, doing it here helps compress the incoming data into Grbl's
-    // line buffer, which is limited in size. The g-code standard actually states a line can't
-    // exceed 256 characters, but the Arduino Uno does not have the memory space for this.
-    // With a better processor, it would be very easy to pull this initial parsing out as a 
-    // seperate task to be shared by the g-code parser and Grbl's system commands.
-    
-    while((c = serial_read()) != SERIAL_NO_DATA) {
-      if ((c == '\n') || (c == '\r')) { // End of line reached
-        line[char_counter] = 0; // Set string termination character.
-        protocol_execute_line(line); // Line is complete. Execute it!
-        comment = COMMENT_NONE;
-        char_counter = 0;
-      } else {
-        if (comment != COMMENT_NONE) {
-          // Throw away all comment characters
-          if (c == ')') {
-            // End of comment. Resume line. But, not if semicolon type comment.
-            if (comment == COMMENT_TYPE_PARENTHESES) { comment = COMMENT_NONE; }
-          }
-        } else {
-          if (c <= ' ') { 
-            // Throw away whitepace and control characters  
-          } else if (c == '/') { 
-            // Block delete NOT SUPPORTED. Ignore character.
-            // NOTE: If supported, would simply need to check the system if block delete is enabled.
-          } else if (c == '(') {
-            // Enable comments flag and ignore all characters until ')' or EOL.
-            // NOTE: This doesn't follow the NIST definition exactly, but is good enough for now.
-            // In the future, we could simply remove the items within the comments, but retain the
-            // comment control characters, so that the g-code parser can error-check it.
-            comment = COMMENT_TYPE_PARENTHESES;
-          } else if (c == ';') {
-            // NOTE: ';' comment to EOL is a LinuxCNC definition. Not NIST.
-            comment = COMMENT_TYPE_SEMICOLON;
-            
-          // TODO: Install '%' feature 
-          // } else if (c == '%') {
-            // Program start-end percent sign NOT SUPPORTED.
-            // NOTE: This maybe installed to tell Grbl when a program is running vs manual input,
-            // where, during a program, the system auto-cycle start will continue to execute 
-            // everything until the next '%' sign. This will help fix resuming issues with certain
-            // functions that empty the planner buffer to execute its task on-time.
+    // Process one line of incoming file data
+    protocol_parse_input();
 
-          } else if (char_counter >= (LINE_BUFFER_SIZE-1)) {
-            // Detect line buffer overflow. Report error and reset line buffer.
-            report_status_message(STATUS_OVERFLOW);
-            comment = COMMENT_NONE;
-            char_counter = 0;
-          } else if (c >= 'a' && c <= 'z') { // Upcase lowercase
-            line[char_counter++] = c-'a'+'A';
-          } else {
-            line[char_counter++] = c;
-          }
-        }
-      }
-    }
-    
     // If there are no more characters in the serial read buffer to be processed and executed,
-    // this indicates that g-code streaming has either filled the planner buffer or has 
+    // this indicates that g-code streaming has either filled the planner buffer or has
     // completed. In either case, auto-cycle start, if enabled, any queued moves.
     protocol_auto_cycle_start();
 
     protocol_execute_realtime();  // Runtime command check point.
     if (sys.abort) { return; } // Bail to main() program loop to reset system.
-              
+
   }
-  
+
   return; /* Never reached */
+}
+
+static uint8_t c;
+void protocol_parse_serial() {
+    // Process one line of incoming serial data, as the data becomes available. Performs an
+    // initial filtering by removing spaces and comments and capitalizing all letters.
+    while((c = serial_read()) != SERIAL_NO_DATA) {
+    	if (!protocol_parse_serial_input(c)) {
+    		// We've recieved a bad line
+    		// Clear the current serial data
+    		// Keep throwing it away for a while
+    		unsigned int current_poller_count = poller_count;
+    		while (poller_count - current_poller_count < 25) {
+    			while((c = serial_read()) != SERIAL_NO_DATA) {
+    				// Throw away new data
+    			}
+    		}
+
+		  // Now report the failure
+		  printPgmString(PSTR("Resend: "));
+		  print_uint32_base10(protocol_parse_serial_get_failed_line());
+		  printPgmString(PSTR("\r\n"));
+		  break;
+    	}
+    }
 }
 
 
@@ -187,10 +147,23 @@ void protocol_execute_realtime()
   uint8_t rt_exec; // Temp variable to avoid calling volatile multiple times.
 
   do { // If system is suspended, suspend loop restarts here.
-    
+
+	  static unsigned int status_poller_count = 0;
+
+	  // Report the status every second (if enabled)
+	  if (get_report_automatic_status() > 0) {
+		  if (poller_count - status_poller_count >  50) {
+			  status_poller_count = poller_count;
+			  bit_true_atomic(sys_rt_exec_state, EXEC_STATUS_REPORT);
+		  }
+	  }
+
+	  temperature_check();
+
   // Check and execute alarms. 
   rt_exec = sys_rt_exec_alarm; // Copy volatile sys_rt_exec_alarm.
   if (rt_exec) { // Enter only if any bit flag is true
+
     // System alarm. Everything has shutdown by something that has gone severely wrong. Report
     // the source of the error to the user. If critical, Grbl disables by entering an infinite
     // loop until system reset/abort.
@@ -205,9 +178,13 @@ void protocol_execute_realtime()
       report_alarm_message(ALARM_PROBE_FAIL);
     } else if (rt_exec & EXEC_ALARM_HOMING_FAIL) {
       report_alarm_message(ALARM_HOMING_FAIL);
-    }
+    } else if (rt_exec & EXEC_ALARM_TEMP_ERROR) {
+        report_alarm_message(ALARM_TEMP_ERROR);
+      }
     // Halt everything upon a critical event flag. Currently hard and soft limits flag this.
     if (rt_exec & EXEC_CRITICAL_EVENT) {
+    	spindle_stop(); // Make sure spindle is stopped
+
       report_feedback_message(MESSAGE_CRITICAL_EVENT);
       bit_false_atomic(sys_rt_exec_state,EXEC_RESET); // Disable any existing reset
       do { 
@@ -222,6 +199,7 @@ void protocol_execute_realtime()
 //           report_realtime_status();
 //           bit_false_atomic(sys_rt_exec_state,EXEC_STATUS_REPORT); 
 //         }
+    	  screen_update();
       } while (bit_isfalse(sys_rt_exec_state,EXEC_RESET));
     }
     bit_false_atomic(sys_rt_exec_alarm,0xFF); // Clear all alarm flags
@@ -242,17 +220,23 @@ void protocol_execute_realtime()
       report_realtime_status();
       bit_false_atomic(sys_rt_exec_state,EXEC_STATUS_REPORT);
     }
+
+    // Execute menu
+    if (rt_exec & EXEC_MENU) {
+    	screen_entermenu();
+    	bit_false_atomic(sys_rt_exec_state,EXEC_MENU);
+    }
   
     // Execute hold states.
     // NOTE: The math involved to calculate the hold should be low enough for most, if not all, 
     // operational scenarios. Once hold is initiated, the system enters a suspend state to block
     // all main program processes until either reset or resumed.
-    if (rt_exec & (EXEC_MOTION_CANCEL | EXEC_FEED_HOLD | EXEC_SAFETY_DOOR)) {
+    if (rt_exec & (EXEC_TEMPERATURE | EXEC_FEED_HOLD | EXEC_SAFETY_DOOR)) {
       
       // TODO: CHECK MODE? How to handle this? Likely nothing, since it only works when IDLE and then resets Grbl.
                 
       // State check for allowable states for hold methods.
-      if ((sys.state == STATE_IDLE) || (sys.state & (STATE_CYCLE | STATE_HOMING | STATE_MOTION_CANCEL | STATE_HOLD | STATE_SAFETY_DOOR))) {
+      if ((sys.state == STATE_IDLE) || (sys.state & (STATE_CYCLE | STATE_HOMING | STATE_TEMPERATURE | STATE_HOLD | STATE_SAFETY_DOOR))) {
 
         // If in CYCLE state, all hold states immediately initiate a motion HOLD.
         if (sys.state == STATE_CYCLE) {
@@ -264,17 +248,22 @@ void protocol_execute_realtime()
         
         // Execute and flag a motion cancel with deceleration and return to idle. Used primarily by probing cycle
         // to halt and cancel the remainder of the motion.
-        if (rt_exec & EXEC_MOTION_CANCEL) {
-          // MOTION_CANCEL only occurs during a CYCLE, but a HOLD and SAFETY_DOOR may been initiated beforehand
-          // to hold the CYCLE. If so, only flag that motion cancel is complete.
-          if (sys.state == STATE_CYCLE) { sys.state = STATE_MOTION_CANCEL; }
-          sys.suspend |= SUSPEND_MOTION_CANCEL; // Indicate motion cancel when resuming. Special motion complete.
+        if (rt_exec & EXEC_TEMPERATURE) {
+        	  if (sys.suspend & SUSPEND_ENABLE_READY) { bit_true(rt_exec,EXEC_CYCLE_STOP); } // Added to stop laser on hold
+        	  sys.suspend |= SUSPEND_ENERGIZE; // Added to stop laser on hold
+        	  status_poller_count = 0;
+        	  sys.state = STATE_TEMPERATURE;
         }
     
         // Execute a feed hold with deceleration, only during cycle.
         if (rt_exec & EXEC_FEED_HOLD) {
           // Block SAFETY_DOOR state from prematurely changing back to HOLD.
-          if (bit_isfalse(sys.state,STATE_SAFETY_DOOR)) { sys.state = STATE_HOLD; }
+          if (bit_isfalse(sys.state,STATE_SAFETY_DOOR)) {
+        	  if (sys.suspend & SUSPEND_ENABLE_READY) { bit_true(rt_exec,EXEC_CYCLE_STOP); } // Added to stop laser on hold
+        	  sys.suspend |= SUSPEND_ENERGIZE; // Added to stop laser on hold
+        	  status_poller_count = 0;
+        	  sys.state = STATE_HOLD;
+          }
         }
   
         // Execute a safety door stop with a feed hold, only during a cycle, and disable spindle/coolant.
@@ -282,26 +271,28 @@ void protocol_execute_realtime()
         // devices (spindle/coolant), and blocks resuming until switch is re-engaged. The power-down is 
         // executed here, if IDLE, or when the CYCLE completes via the EXEC_CYCLE_STOP flag.
         if (rt_exec & EXEC_SAFETY_DOOR) {
-          report_feedback_message(MESSAGE_SAFETY_DOOR_AJAR); 
+          report_feedback_message(MESSAGE_SAFETY_DOOR_AJAR);
+
           // If already in active, ready-to-resume HOLD, set CYCLE_STOP flag to force de-energize.
           // NOTE: Only temporarily sets the 'rt_exec' variable, not the volatile 'rt_exec_state' variable.
           if (sys.suspend & SUSPEND_ENABLE_READY) { bit_true(rt_exec,EXEC_CYCLE_STOP); }
           sys.suspend |= SUSPEND_ENERGIZE;
+          status_poller_count = 0;
           sys.state = STATE_SAFETY_DOOR;
         }
          
       }
-      bit_false_atomic(sys_rt_exec_state,(EXEC_MOTION_CANCEL | EXEC_FEED_HOLD | EXEC_SAFETY_DOOR));      
+      bit_false_atomic(sys_rt_exec_state,(EXEC_TEMPERATURE | EXEC_FEED_HOLD | EXEC_SAFETY_DOOR));
     }
           
     // Execute a cycle start by starting the stepper interrupt to begin executing the blocks in queue.
     if (rt_exec & EXEC_CYCLE_START) {
       // Block if called at same time as the hold commands: feed hold, motion cancel, and safety door.
       // Ensures auto-cycle-start doesn't resume a hold without an explicit user-input.
-      if (!(rt_exec & (EXEC_FEED_HOLD | EXEC_MOTION_CANCEL | EXEC_SAFETY_DOOR))) { 
+      if (!(rt_exec & (EXEC_FEED_HOLD | EXEC_TEMPERATURE | EXEC_SAFETY_DOOR))) {
         // Cycle start only when IDLE or when a hold is complete and ready to resume.
         // NOTE: SAFETY_DOOR is implicitly blocked. It reverts to HOLD when the door is closed.
-        if ((sys.state == STATE_IDLE) || ((sys.state & (STATE_HOLD | STATE_MOTION_CANCEL)) && (sys.suspend & SUSPEND_ENABLE_READY))) {
+        if ((sys.state == STATE_IDLE) || ((sys.state & (STATE_HOLD | STATE_TEMPERATURE)) && (sys.suspend & SUSPEND_ENABLE_READY))) {
           // Re-energize powered components, if disabled by SAFETY_DOOR.
           if (sys.suspend & SUSPEND_ENERGIZE) { 
             // Delayed Tasks: Restart spindle and coolant, delay to power-up, then resume cycle.
@@ -317,6 +308,7 @@ void protocol_execute_realtime()
           }
           // Start cycle only if queued motions exist in planner buffer and the motion is not canceled.
           if (plan_get_current_block() && bit_isfalse(sys.suspend,SUSPEND_MOTION_CANCEL)) {
+        	  status_poller_count = 0;
             sys.state = STATE_CYCLE;
             st_prep_buffer(); // Initialize step segment buffer before beginning cycle.
             st_wake_up();
@@ -335,7 +327,7 @@ void protocol_execute_realtime()
     // cycle reinitializations. The stepper path should continue exactly as if nothing has happened.   
     // NOTE: EXEC_CYCLE_STOP is set by the stepper subsystem when a cycle or feed hold completes.
     if (rt_exec & EXEC_CYCLE_STOP) {
-      if (sys.state & (STATE_HOLD | STATE_SAFETY_DOOR)) {
+      if (sys.state & (STATE_TEMPERATURE | STATE_HOLD | STATE_SAFETY_DOOR)) {
         // Hold complete. Set to indicate ready to resume.  Remain in HOLD or DOOR states until user
         // has issued a resume command or reset.
         if (sys.suspend & SUSPEND_ENERGIZE) { // De-energize system if safety door has been opened.
@@ -346,6 +338,7 @@ void protocol_execute_realtime()
         bit_true(sys.suspend,SUSPEND_ENABLE_READY);
       } else { // Motion is complete. Includes CYCLE, HOMING, and MOTION_CANCEL states.
         sys.suspend = SUSPEND_DISABLE;
+        status_poller_count = 0;
         sys.state = STATE_IDLE;
       }
       bit_false_atomic(sys_rt_exec_state,EXEC_CYCLE_STOP);
@@ -356,17 +349,60 @@ void protocol_execute_realtime()
   // Overrides flag byte (sys.override) and execution should be installed here, since they 
   // are realtime and require a direct and controlled interface to the main stepper program.
 
+  	uint8_t buzzer_enabled = 0;
+	static unsigned int buzzer_poller_count = 0;
+
+
   // Reload step segment buffer
-  if (sys.state & (STATE_CYCLE | STATE_HOLD | STATE_MOTION_CANCEL | STATE_SAFETY_DOOR | STATE_HOMING)) { st_prep_buffer(); }  
+  if (sys.state & (STATE_CYCLE | STATE_HOLD | STATE_TEMPERATURE | STATE_SAFETY_DOOR | STATE_HOMING)) { st_prep_buffer(); }
   
   // If safety door was opened, actively check when safety door is closed and ready to resume.
   // NOTE: This unlocks the SAFETY_DOOR state to a HOLD state, such that CYCLE_START can activate a resume.
   if (sys.state == STATE_SAFETY_DOOR) { 
     if (bit_istrue(sys.suspend,SUSPEND_ENABLE_READY)) { 
       if (!(system_check_safety_door_ajar())) {
+    	  status_poller_count = 0;
         sys.state = STATE_HOLD; // Update to HOLD state to indicate door is closed and ready to resume.
       }
     }
+	if (poller_count - buzzer_poller_count >  50) {
+		buzzer_poller_count = poller_count;
+		buzzer_enabled = 1;
+	}
+
+#ifdef BUZZER_PIN
+    if (buzzer_enabled) {
+		if (plan_get_current_block() && bit_isfalse(sys.suspend,SUSPEND_MOTION_CANCEL)) {
+			if (settings.extraflags & BITFLAG_BEEPER_ENABLE) {
+				tone(BUZZER_PIN, 262, 150);
+			}
+		}
+    }
+#endif
+  }
+
+  static uint8_t door_led_state = 0;
+  if (sys.state != STATE_SAFETY_DOOR) {
+	  if (door_led_state) {
+			WRITE(DOOR_STATUS_LED, 0);
+			door_led_state = 0;
+		}
+  } else {
+	  if (buzzer_enabled) {
+			if (!door_led_state) {
+				WRITE(DOOR_STATUS_LED, 255);
+				door_led_state = 1;
+			}
+	  } else if (poller_count - buzzer_poller_count > 25) {
+			if (door_led_state) {
+				WRITE(DOOR_STATUS_LED, 0);
+				door_led_state = 0;
+			}
+	  }
+  }
+
+  if (settings.extraflags & BITFLAG_SCREEN_ENABLE) {
+	  screen_update();
   }
 
   } while(sys.suspend); // Check for system suspend state before exiting.

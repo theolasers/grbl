@@ -19,10 +19,16 @@
 */
 
 #include "grbl.h"
+#include "fastio.h"
 
+volatile uint8_t sys_probe_state;   // Probing state value.  Used to coordinate the probing cycle with stepper ISR.
+volatile uint8_t sys_rt_exec_state;  // Global realtime executor bitflag variable for state management. See EXEC bitmasks.
+volatile uint8_t sys_rt_exec_alarm;  // Global realtime executor bitflag variable for setting various alarms.
 
 void system_init() 
 {
+#ifndef CPU_MAP_ATMEGA2560_RAMPS_1_4
+	// Ramps disabled
   CONTROL_DDR &= ~(CONTROL_MASK); // Configure as input pins
   #ifdef DISABLE_CONTROL_PIN_PULL_UP
     CONTROL_PORT &= ~(CONTROL_MASK); // Normal low operation. Requires external pull-down.
@@ -31,6 +37,7 @@ void system_init()
   #endif
   CONTROL_PCMSK |= CONTROL_MASK;  // Enable specific pins of the Pin Change Interrupt
   PCICR |= (1 << CONTROL_INT);   // Enable Pin Change Interrupt
+#endif
 }
 
 
@@ -38,6 +45,8 @@ void system_init()
 // only the realtime command execute variable to have the main program execute these when 
 // its ready. This works exactly like the character-based realtime commands when picked off
 // directly from the incoming serial data stream.
+//ramps disabled
+#ifndef CPU_MAP_ATMEGA2560_RAMPS_1_4
 ISR(CONTROL_INT_vect) 
 {
   uint8_t pin = (CONTROL_PIN & CONTROL_MASK);
@@ -60,6 +69,7 @@ ISR(CONTROL_INT_vect)
     } 
   }
 }
+#endif
 
 
 // Returns if safety door is ajar(T) or closed(F), based on pin state.
@@ -72,14 +82,19 @@ uint8_t system_check_safety_door_ajar()
       return(bit_isfalse(CONTROL_PIN,bit(SAFETY_DOOR_BIT)));
     #endif
   #else
-    return(false); // Input pin not enabled, so just return that it's closed.
+	#if DOOR_PIN
+      if (!READ(DOOR_PIN)) {
+  		return true;
+      }
+	#endif
+      return(false); // Input pin not enabled, so just return that it's closed.
   #endif
 }
 
-
 // Executes user startup script, if stored.
-void system_execute_startup(char *line) 
+void system_execute_startup()
 {
+	char line[LINE_BUFFER_SIZE];
   uint8_t n;
   for (n=0; n < N_STARTUP_LINE; n++) {
     if (!(settings_read_startup_line(n, line))) {
@@ -110,10 +125,17 @@ uint8_t system_execute_line(char *line)
   switch( line[char_counter] ) {
     case 0 : report_grbl_help(); break;
     case '$': case 'G': case 'C': case 'X':
-      if ( line[(char_counter+1)] != 0 ) { return(STATUS_INVALID_STATEMENT); }
+      if ( line[(char_counter+1)] != 0 ) {
+    	  if ( line[(char_counter+1)] == '$') {
+              if ( sys.state & (STATE_CYCLE | STATE_HOLD | STATE_TEMPERATURE) ) { return(STATUS_IDLE_ERROR); } // Block during cycle. Takes too long to print.
+              else { report_grbl_settings_readable(); }
+              break;
+    	  }
+    	  return(STATUS_INVALID_STATEMENT);
+      }
       switch( line[char_counter] ) {
         case '$' : // Prints Grbl settings
-          if ( sys.state & (STATE_CYCLE | STATE_HOLD) ) { return(STATUS_IDLE_ERROR); } // Block during cycle. Takes too long to print.
+          if ( sys.state & (STATE_CYCLE | STATE_HOLD | STATE_TEMPERATURE) ) { return(STATUS_IDLE_ERROR); } // Block during cycle. Takes too long to print.
           else { report_grbl_settings(); }
           break;
         case 'G' : // Prints gcode parser state
@@ -134,15 +156,7 @@ uint8_t system_execute_line(char *line)
           }
           break; 
         case 'X' : // Disable alarm lock [ALARM]
-          if (sys.state == STATE_ALARM) { 
-            report_feedback_message(MESSAGE_ALARM_UNLOCK);
-            sys.state = STATE_IDLE;
-            // Don't run startup script. Prevents stored moves in startup from causing accidents.
-            if (system_check_safety_door_ajar()) { // Check safety door switch before returning.
-              bit_true(sys_rt_exec_state, EXEC_SAFETY_DOOR);
-              protocol_execute_realtime(); // Enter safety door mode.
-            }
-          } // Otherwise, no effect.
+          system_execute_unlock();
           break;                   
     //  case 'J' : break;  // Jogging methods
           // TODO: Here jogging can be placed for execution as a seperate subprogram. It does not need to be 
@@ -169,25 +183,17 @@ uint8_t system_execute_line(char *line)
           else { report_ngc_parameters(); }
           break;          
         case 'H' : // Perform homing cycle [IDLE/ALARM]
-          if (bit_istrue(settings.flags,BITFLAG_HOMING_ENABLE)) { 
-            sys.state = STATE_HOMING; // Set system state variable
-            // Only perform homing if Grbl is idle or lost.
-            
-            // TODO: Likely not required.
-            if (system_check_safety_door_ajar()) { // Check safety door switch before homing.
-              bit_true(sys_rt_exec_state, EXEC_SAFETY_DOOR);
-              protocol_execute_realtime(); // Enter safety door mode.
-            }
-            
-            
-            mc_homing_cycle(); 
-            if (!sys.abort) {  // Execute startup scripts after successful homing.
-              sys.state = STATE_IDLE; // Set to IDLE when complete.
-              st_go_idle(); // Set steppers to the settings idle state before returning.
-              system_execute_startup(line); 
-            }
-          } else { return(STATUS_SETTING_DISABLED); }
+        	{
+        		int result =system_execute_home(line);
+        		if (result != STATUS_OK) return result;
+        	}
           break;
+        case 'P': // Reset position
+        	clear_vector(sys.position);
+        	clear_vector(gc_state.coord_offset);
+        	gc_sync_position();
+        	plan_sync_position();
+        	break;
         case 'I' : // Print or store build info. [IDLE/ALARM]
           if ( line[++char_counter] == 0 ) { 
             settings_read_build_info(line);
@@ -209,12 +215,25 @@ uint8_t system_execute_line(char *line)
           switch (line[++char_counter]) {
             case '$': settings_restore(SETTINGS_RESTORE_DEFAULTS); break;
             case '#': settings_restore(SETTINGS_RESTORE_PARAMETERS); break;
-            case '*': settings_restore(SETTINGS_RESTORE_ALL); break;
+            case '+': settings_restore(SETTINGS_RESTORE_ALL); break;
             default: return(STATUS_INVALID_STATEMENT);
           }
           report_feedback_message(MESSAGE_RESTORE_DEFAULTS);
           mc_reset(); // Force reset to ensure settings are initialized correctly.
           break;
+		case 'S' :
+			if (line[++char_counter] != 'D') { return(STATUS_INVALID_STATEMENT); }
+			if (line[++char_counter] != ':') { return(STATUS_INVALID_STATEMENT); }
+			char_counter++;
+			if (strncmp(&line[char_counter], "LS", 2) == 0) {
+				card_ls_root();
+			} else if (strncmp(&line[char_counter], "CAT:", 4) == 0) {
+				char_counter+=4;
+				card_cat_file(&line[char_counter]);
+			} else {
+				return(STATUS_INVALID_STATEMENT);
+			}
+			break;
         case 'N' : // Startup lines. [IDLE/ALARM]
           if ( line[++char_counter] == 0 ) { // Print startup lines
             for (helper_var=0; helper_var < N_STARTUP_LINE; helper_var++) {
@@ -256,6 +275,42 @@ uint8_t system_execute_line(char *line)
   return(STATUS_OK); // If '$' command makes it to here, then everything's ok.
 }
 
+int system_execute_home()
+{
+	if ( !(sys.state == STATE_IDLE || sys.state == STATE_ALARM) ) { return(STATUS_IDLE_ERROR); }
+    if (bit_istrue(settings.flags,BITFLAG_HOMING_ENABLE)) {
+      sys.state = STATE_HOMING; // Set system state variable
+      // Only perform homing if Grbl is idle or lost.
+
+      // TODO: Likely not required.
+      if (system_check_safety_door_ajar()) { // Check safety door switch before homing.
+        bit_true(sys_rt_exec_state, EXEC_SAFETY_DOOR);
+        protocol_execute_realtime(); // Enter safety door mode.
+      }
+
+
+      mc_homing_cycle();
+      if (!sys.abort) {  // Execute startup scripts after successful homing.
+        sys.state = STATE_IDLE; // Set to IDLE when complete.
+        st_go_idle(); // Set steppers to the settings idle state before returning.
+        system_execute_startup();
+      }
+    } else { return(STATUS_SETTING_DISABLED); }
+    return(STATUS_OK);
+}
+
+void system_execute_unlock()
+{
+	if (sys.state == STATE_ALARM) {
+		report_feedback_message(MESSAGE_ALARM_UNLOCK);
+		sys.state = STATE_IDLE;
+		// Don't run startup script. Prevents stored moves in startup from causing accidents.
+		if (system_check_safety_door_ajar()) { // Check safety door switch before returning.
+		  bit_true(sys_rt_exec_state, EXEC_SAFETY_DOOR);
+		  protocol_execute_realtime(); // Enter safety door mode.
+		}
+	  } // Otherwise, no effect.
+}
 
 // Returns machine position of axis 'idx'. Must be sent a 'step' array.
 // NOTE: If motor steps and machine position are not in the same coordinate frame, this function

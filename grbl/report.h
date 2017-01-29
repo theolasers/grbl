@@ -34,6 +34,12 @@
 #define STATUS_SOFT_LIMIT_ERROR 10
 #define STATUS_OVERFLOW 11
 #define STATUS_MAX_STEP_RATE_EXCEEDED 12
+#define STATUS_CHECKSUM 13
+#define STATUS_NO_LINE_NUMBER 14
+#define STATUS_NO_RESPONSE 15
+#define STATUS_NO_STREAM 16
+#define STATUS_STREAM_FULL 17
+#define STATUS_BINARY_OK 18
 
 #define STATUS_GCODE_UNSUPPORTED_COMMAND 20
 #define STATUS_GCODE_MODAL_GROUP_VIOLATION 21
@@ -53,13 +59,15 @@
 #define STATUS_GCODE_NO_OFFSETS_IN_PLANE 35
 #define STATUS_GCODE_UNUSED_WORDS 36
 #define STATUS_GCODE_G43_DYNAMIC_AXIS_ERROR 37
+#define STATUS_GCODE_SAME_POSITION 38
 
 // Define Grbl alarm codes.
-#define ALARM_HARD_LIMIT_ERROR 1
 #define ALARM_SOFT_LIMIT_ERROR 2
 #define ALARM_ABORT_CYCLE 3
 #define ALARM_PROBE_FAIL 4
 #define ALARM_HOMING_FAIL 5
+#define ALARM_HARD_LIMIT_ERROR 6
+#define ALARM_TEMP_ERROR 7
 
 // Define Grbl feedback message codes.
 #define MESSAGE_CRITICAL_EVENT 1
@@ -70,6 +78,10 @@
 #define MESSAGE_SAFETY_DOOR_AJAR 6
 #define MESSAGE_PROGRAM_END 7
 #define MESSAGE_RESTORE_DEFAULTS 8
+
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 // Prints system status messages.
 void report_status_message(uint8_t status_code);
@@ -88,6 +100,7 @@ void report_grbl_help();
 
 // Prints Grbl global settings
 void report_grbl_settings();
+void report_grbl_settings_readable();
 
 // Prints an echo of the pre-parsed line received right before execution.
 void report_echo_line_received(char *line);
@@ -109,5 +122,12 @@ void report_startup_line(uint8_t n, char *line);
 
 // Prints build info and user info
 void report_build_info(char *line);
+
+void report_automatic_status(uint8_t on);
+uint8_t get_report_automatic_status();
+
+#ifdef __cplusplus
+} // extern "C"
+#endif
 
 #endif
